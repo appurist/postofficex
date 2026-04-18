@@ -1,0 +1,46 @@
+{
+  "server": {
+    "smtp": {
+      "host": "0.0.0.0",
+      "port": 2525,
+      "hostname": "mail.example.test",
+      "allowPlaintext": true,
+      "enableStartTls": false
+    },
+    "pop3": {
+      "host": "0.0.0.0",
+      "port": 2110,
+      "tlsPort": 2995,
+      "allowPlaintext": true,
+      "enableTls": false
+    }
+  },
+  "tls": {
+    "certFile": "./certs/server.crt",
+    "keyFile": "./certs/server.key"
+  },
+  "limits": {
+    "maxMessageBytes": 10485760,
+    "maxRecipientsPerMessage": 32,
+    "maxMailboxBytes": 52428800,
+    "socketTimeoutMs": 300000,
+    "maxInvalidAuthAttempts": 5
+  },
+  "storage": {
+    "rootDir": "./data"
+  },
+  "domains": [
+    "example.test"
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "mailbox": "alice",
+      "passwordHash": "$argon2id$v=19$m=65536,t=2,p=1$replace$me",
+      "addresses": [
+        "alice@example.test",
+        "support@example.test"
+      ]
+    }
+  ]
+}

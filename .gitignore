@@ -1,0 +1,11 @@
+dist/
+data/
+*.log
+
+*.bun-build
+
+config.json
+
+node_modules/
+
+postofficex.exe
