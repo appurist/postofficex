@@ -266,4 +266,24 @@ describe("smtp submission", () => {
     expect(remoteServer.deliveries[0].rawMessage).toContain("Subject: outbound submit");
     expect(remoteServer.deliveries[0].rawMessage).toContain("remote body");
   });
+
+  test("accepts submission auth by email address and repeated-domain login", async () => {
+    active = await setupSubmissionServer();
+
+    const smtpA = await connect(active.submissionPort);
+    await readUntil(smtpA, (text) => text.endsWith("\r\n"));
+    await smtpCommand(smtpA, "EHLO localhost\r\n");
+    const authA = Buffer.from("\u0000alice@example.test\u0000secret123").toString("base64");
+    expect(await smtpCommand(smtpA, `AUTH PLAIN ${authA}\r\n`)).toContain("235 2.7.0");
+    expect(await smtpCommand(smtpA, "MAIL FROM:<alice@example.test>\r\n")).toContain("250");
+    expect(await smtpCommand(smtpA, "QUIT\r\n")).toContain("221");
+
+    const smtpB = await connect(active.submissionPort);
+    await readUntil(smtpB, (text) => text.endsWith("\r\n"));
+    await smtpCommand(smtpB, "EHLO localhost\r\n");
+    const authB = Buffer.from("\u0000alice@example.test@example.test\u0000secret123").toString("base64");
+    expect(await smtpCommand(smtpB, `AUTH PLAIN ${authB}\r\n`)).toContain("235 2.7.0");
+    expect(await smtpCommand(smtpB, "MAIL FROM:<alice@example.test>\r\n")).toContain("250");
+    expect(await smtpCommand(smtpB, "QUIT\r\n")).toContain("221");
+  });
 });

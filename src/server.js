@@ -21,6 +21,16 @@ function isMailboxAddress(address) {
   return Boolean(localPart && domain);
 }
 
+function normalizeLoginIdentifier(value) {
+  const normalized = value.trim().toLowerCase();
+  const parts = normalized.split("@");
+  if (parts.length === 3 && parts[1] === parts[2]) {
+    return `${parts[0]}@${parts[1]}`;
+  }
+
+  return normalized;
+}
+
 export class PostOfficeServer {
   constructor(config, store, log = logger, deps = {}) {
     this.config = config;
@@ -285,8 +295,8 @@ export class PostOfficeServer {
   }
 
   async authenticateSubmissionUser(username, password) {
-    const normalized = username.trim().toLowerCase();
-    const user = this.users.usersByUsername.get(normalized);
+    const normalized = normalizeLoginIdentifier(username);
+    const user = this.users.usersByUsername.get(normalized) ?? this.users.usersByAddress.get(normalized);
     const valid = user ? await verifyPassword(password, user.passwordHash) : false;
     return valid ? user : null;
   }
@@ -737,7 +747,7 @@ export class PostOfficeServer {
             this.handlePop3(socket, true, false, false);
             return;
           case "USER":
-            state.username = argument.toLowerCase();
+            state.username = normalizeLoginIdentifier(argument);
             write("+OK user accepted\r\n");
             return;
           case "PASS":
@@ -750,7 +760,8 @@ export class PostOfficeServer {
               return;
             }
             {
-              const user = this.users.usersByUsername.get(state.username);
+              const user =
+                this.users.usersByUsername.get(state.username) ?? this.users.usersByAddress.get(state.username);
               const valid = user ? await verifyPassword(argument, user.passwordHash) : false;
               if (!valid || !user) {
                 state.authFailures += 1;

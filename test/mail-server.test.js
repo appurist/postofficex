@@ -121,4 +121,36 @@ describe("PostOfficeX", () => {
     expect(await pop3Command(pop3c, "STAT\r\n")).toContain("+OK 0");
     expect(await pop3Command(pop3c, "QUIT\r\n")).toContain("+OK");
   });
+
+  test("accepts POP3 login by email address and repeated-domain login", async () => {
+    activeServer = await setupServer();
+
+    const smtp = await connect(activeServer.smtpPort);
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    smtp.write("EHLO localhost\r\n");
+    await readUntil(smtp, (text) => text.includes("250 SIZE"));
+    smtp.write("MAIL FROM:<sender@external.test>\r\n");
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    smtp.write("RCPT TO:<alice@example.test>\r\n");
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    smtp.write("DATA\r\n");
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    smtp.write("Subject: Address login\r\n\r\nbody\r\n.\r\n");
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    smtp.end();
+
+    const pop3a = await connect(activeServer.pop3Port);
+    await readUntil(pop3a, (text) => text.endsWith("\r\n"));
+    expectOk(await pop3Command(pop3a, "USER alice@example.test\r\n"));
+    expectOk(await pop3Command(pop3a, "PASS secret123\r\n"));
+    expect(await pop3Command(pop3a, "STAT\r\n")).toContain("+OK 1");
+    expectOk(await pop3Command(pop3a, "QUIT\r\n"));
+
+    const pop3b = await connect(activeServer.pop3Port);
+    await readUntil(pop3b, (text) => text.endsWith("\r\n"));
+    expectOk(await pop3Command(pop3b, "USER alice@example.test@example.test\r\n"));
+    expectOk(await pop3Command(pop3b, "PASS secret123\r\n"));
+    expect(await pop3Command(pop3b, "STAT\r\n")).toContain("+OK 1");
+    expectOk(await pop3Command(pop3b, "QUIT\r\n"));
+  });
 });
