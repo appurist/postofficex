@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import https from "node:https";
-import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.js";
 import { PostOfficeServer } from "../src/server.js";
 import { MailboxStore } from "../src/storage.js";
+import { reservePort } from "./helpers.js";
 
 let activeServer = null;
 
@@ -39,18 +39,6 @@ function httpsRequest(url, { method = "GET", headers = {}, body } = {}) {
   });
 }
 
-async function reservePort() {
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : null;
-      server.close((error) => (error ? reject(error) : resolve(port)));
-    });
-  });
-}
-
 async function setupAdminServer({
   plaintextAdminPassword = false,
   adminLogRequests = false,
@@ -61,6 +49,8 @@ async function setupAdminServer({
   const userPasswordHash = await Bun.password.hash("secret123");
   const adminPasswordHash = plaintextAdminPassword ? "" : await Bun.password.hash("adminpw");
   const smtpPort = await reservePort();
+  const submissionPort = await reservePort();
+  const submissionTlsPort = await reservePort();
   const pop3Port = await reservePort();
   const pop3TlsPort = await reservePort();
   const adminPort = await reservePort();
@@ -73,6 +63,14 @@ async function setupAdminServer({
         allowPlaintext: true,
         enableStartTls: false
       },
+      submission: {
+        host: "127.0.0.1",
+        port: submissionPort,
+        tlsPort: submissionTlsPort,
+        allowPlaintext: true,
+        enableStartTls: false,
+        enableTls: false
+      },
       pop3: {
         host: "127.0.0.1",
         port: pop3Port,
@@ -80,6 +78,11 @@ async function setupAdminServer({
         allowPlaintext: true,
         enableTls: false
       }
+    },
+    outbound: {
+      greetingHostname: "mail.test.local",
+      connectTimeoutMs: 30000,
+      preferStartTls: false
     },
     tls: {
       certFile: join(process.cwd(), "certs", "server.crt"),
@@ -234,10 +237,17 @@ describe("admin ui", () => {
         smtpPort: "3526",
         smtpHostname: "mail.changed.test",
         smtpAllowPlaintext: "on",
+        submissionHost: "127.0.0.1",
+        submissionPort: "3587",
+        submissionTlsPort: "3465",
+        submissionAllowPlaintext: "on",
         pop3Host: "127.0.0.1",
         pop3Port: "3111",
         pop3TlsPort: "3996",
         pop3AllowPlaintext: "on",
+        outboundGreetingHostname: "mail.changed.test",
+        outboundConnectTimeoutMs: "45000",
+        outboundPreferStartTls: "on",
         tlsCertFile: "./missing.crt",
         tlsKeyFile: "./missing.key",
         maxMessageBytes: "1048576",
@@ -271,7 +281,12 @@ describe("admin ui", () => {
 
     const saved = JSON.parse(await readFile(activeServer.configPath, "utf8"));
     expect(saved.server.smtp.hostname).toBe("mail.changed.test");
+    expect(saved.server.submission.port).toBe(3587);
+    expect(saved.server.submission.tlsPort).toBe(3465);
     expect(saved.domains).toEqual(["example.test", "example.net"]);
+    expect(saved.outbound.greetingHostname).toBe("mail.changed.test");
+    expect(saved.outbound.connectTimeoutMs).toBe(45000);
+    expect(saved.outbound.preferStartTls).toBe(true);
     expect(saved.admin.enableTls).toBe(true);
     expect(saved.admin.logRequests).toBe(true);
     expect(saved.users.some((user) => user.username === "bob")).toBe(true);

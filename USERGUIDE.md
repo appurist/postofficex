@@ -33,6 +33,14 @@ If the config file is missing or invalid, startup fails with a configuration err
       "allowPlaintext": true,
       "enableStartTls": true
     },
+    "submission": {
+      "host": "0.0.0.0",
+      "port": 587,
+      "tlsPort": 465,
+      "allowPlaintext": false,
+      "enableStartTls": true,
+      "enableTls": true
+    },
     "pop3": {
       "host": "0.0.0.0",
       "port": 110,
@@ -40,6 +48,11 @@ If the config file is missing or invalid, startup fails with a configuration err
       "allowPlaintext": false,
       "enableTls": true
     }
+  },
+  "outbound": {
+    "greetingHostname": "mail.example.com",
+    "connectTimeoutMs": 30000,
+    "preferStartTls": true
   },
   "tls": {
     "certFile": "./certs/server.crt",
@@ -105,6 +118,40 @@ If the config file is missing or invalid, startup fails with a configuration err
   - If `false`, clients must use implicit TLS on `tlsPort` or upgrade with `STLS`.
 - `enableTls`: Enables POP3 TLS support.
   - If `true`, `tls.certFile` and `tls.keyFile` must exist and be readable.
+
+### `server.submission`
+
+`server.submission` controls authenticated SMTP client submission.
+
+- `host`: IP address to bind the submission listeners to.
+- `port`: Plain submission port.
+  - Use `587` for standard authenticated submission.
+- `tlsPort`: Implicit TLS submission port.
+  - Use `465` for SMTPS / implicit TLS submission.
+- `allowPlaintext`: Controls whether clients may authenticate without TLS on the plain submission port.
+  - If `false`, clients on `port` must use `STARTTLS` before `AUTH`.
+- `enableStartTls`: Enables `STARTTLS` on the plain submission port.
+- `enableTls`: Enables the implicit TLS submission listener on `tlsPort`.
+
+Submission is separate from inbound SMTP:
+
+- inbound SMTP on `server.smtp.port` only accepts mail for configured local recipients
+- submission on `server.submission.port` and `server.submission.tlsPort` requires authentication and can send to external recipients
+
+### `outbound`
+
+`outbound` controls how submitted external mail is sent to recipient MX hosts.
+
+- `greetingHostname`: Hostname used in outbound `EHLO`.
+  - This should normally match your mail hostname such as `mail.example.com`.
+- `connectTimeoutMs`: Outbound connection timeout per target host.
+- `preferStartTls`: If `true`, PostOfficeX attempts `STARTTLS` when the remote server advertises it.
+
+Important:
+
+- outbound delivery is only used for authenticated submission
+- PostOfficeX does not provide an unauthenticated open relay
+- there is no smarthost / upstream relay configuration in the current implementation
 
 ### `tls`
 
@@ -214,8 +261,9 @@ Important:
 Each entry in `users` defines:
 
 - the POP3 login name
+- the SMTP submission login name
 - the mailbox folder name on disk
-- the password hash used for POP3 login
+- the password hash used for POP3 login and SMTP submission auth
 - the full email addresses that deliver into that mailbox
 
 Example:
@@ -235,6 +283,7 @@ Example:
 ### `username`
 
 - Used for POP3 `USER`.
+- Used for SMTP submission `AUTH`.
 - Case is normalized to lowercase when config is loaded.
 
 Example:
@@ -259,7 +308,8 @@ data/mailboxes/alice/
 ### `passwordHash`
 
 - Must be a Bun-compatible password hash.
-- The server does not store plaintext passwords.
+- The server does not store plaintext user passwords.
+- The same hash is used for POP3 and SMTP submission authentication.
 
 Generate a hash with Bun:
 
@@ -274,6 +324,7 @@ Then place the generated hash into `passwordHash`.
 - List of exact recipient email addresses that should be accepted for this mailbox.
 - Addresses are normalized to lowercase when config is loaded.
 - SMTP delivery requires an exact address match here.
+- SMTP submission `MAIL FROM` must also match one of the authenticated user's addresses.
 
 Example:
 
@@ -319,6 +370,41 @@ This is the reason a test may fail with:
 ```text
 550 5.1.1 recipient rejected
 ```
+
+## How SMTP Submission Works
+
+SMTP submission is for your own mail clients, not for arbitrary internet senders.
+
+For submission:
+
+1. The client connects to `server.submission.port` or `server.submission.tlsPort`.
+2. The client authenticates with a configured `username` and matching password.
+3. `MAIL FROM` must match one of that user's configured `addresses`.
+4. Local-only recipients are stored directly in local mailboxes.
+5. Submitted messages with external recipients are delivered outbound to recipient MX hosts.
+
+Example:
+
+```json
+"users": [
+  {
+    "username": "alice",
+    "mailbox": "alice",
+    "passwordHash": "$argon2id$...",
+    "addresses": [
+      "alice@example.com",
+      "sales@example.com"
+    ]
+  }
+]
+```
+
+Results:
+
+- login as `alice` is allowed
+- `MAIL FROM:<alice@example.com>` is allowed
+- `MAIL FROM:<sales@example.com>` is allowed
+- `MAIL FROM:<bob@example.com>` is rejected for that login
 
 ## Common Configuration Patterns
 
@@ -383,10 +469,13 @@ This is the reason a test may fail with:
 For public deployment:
 
 - Use SMTP port `25`.
+- Use submission port `587`.
+- Use implicit TLS submission port `465`.
 - Use POP3 port `110` and/or implicit TLS port `995`.
 - Set `server.smtp.hostname` to your real mail hostname.
-- Set `enableStartTls` and `enableTls` to `true`.
+- Set SMTP `enableStartTls`, submission `enableStartTls`, submission `enableTls`, and POP3 `enableTls` to `true`.
 - Set `server.pop3.allowPlaintext` to `false`.
+- Set `server.submission.allowPlaintext` to `false`.
 - Use real certificate files.
 - Open the required firewall ports.
 - Point your domain's `MX` record to the SMTP hostname.
@@ -401,6 +490,14 @@ Example:
     "hostname": "mail.example.com",
     "allowPlaintext": true,
     "enableStartTls": true
+  },
+  "submission": {
+    "host": "0.0.0.0",
+    "port": 587,
+    "tlsPort": 465,
+    "allowPlaintext": false,
+    "enableStartTls": true,
+    "enableTls": true
   },
   "pop3": {
     "host": "0.0.0.0",
@@ -429,6 +526,15 @@ Minimum POP3 test:
 3. Send `PASS` with the password that matches `passwordHash`.
 4. Use `STAT`, `LIST`, and `RETR`.
 
+Minimum SMTP submission test:
+
+1. Connect to the submission port.
+2. Send `EHLO`.
+3. Authenticate with `AUTH PLAIN` or `AUTH LOGIN`.
+4. Send `MAIL FROM` using one of the authenticated user's configured addresses.
+5. Send `RCPT TO`.
+6. Send `DATA`.
+
 ## Troubleshooting
 
 ### `550 5.1.1 recipient rejected`
@@ -446,6 +552,22 @@ Check all of the following:
 - `USER` matches `username`.
 - `passwordHash` was generated from the password you are testing.
 - If `allowPlaintext` is `false`, you are using TLS.
+
+### SMTP submission auth fails
+
+Check all of the following:
+
+- You are connecting to the submission port, not the inbound SMTP port.
+- `username` matches a configured user.
+- The password matches that user's `passwordHash`.
+- If `server.submission.allowPlaintext` is `false`, the client is using TLS or `STARTTLS`.
+
+### SMTP submission sender rejected
+
+If you receive a sender rejection, check that:
+
+- `MAIL FROM` exactly matches one of the authenticated user's `addresses`
+- the address belongs to the same configured user account used for `AUTH`
 
 ### TLS startup fails
 

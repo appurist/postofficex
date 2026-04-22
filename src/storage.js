@@ -52,6 +52,9 @@ export class MailboxStore {
   async deliver(mailbox, request) {
     const rawMessage = request.rawMessage;
     const size = Buffer.byteLength(rawMessage, "utf8");
+    await ensureDirectory(curDir(this.config.storage.rootDir, mailbox));
+    await ensureDirectory(tmpDir(this.config.storage.rootDir, mailbox));
+    await ensureDirectory(metaDir(this.config.storage.rootDir, mailbox));
     await this.ensureQuota(mailbox, size);
 
     const id = generateMessageId(this.config.server.smtp.hostname);

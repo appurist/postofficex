@@ -11,25 +11,55 @@ export async function createPasswordHash(password) {
   return await Bun.password.hash(password);
 }
 
+export async function reservePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+
 export async function setupServer() {
   const rootDir = await mkdtemp(join(tmpdir(), "postofficex-"));
   const passwordHash = await createPasswordHash("secret123");
+  const smtpPort = await reservePort();
+  const submissionPort = await reservePort();
+  const submissionTlsPort = await reservePort();
+  const pop3Port = await reservePort();
+  const pop3TlsPort = await reservePort();
   const config = {
     server: {
       smtp: {
         host: "127.0.0.1",
-        port: 2526,
+        port: smtpPort,
         hostname: "mail.test.local",
         allowPlaintext: true,
         enableStartTls: false
       },
+      submission: {
+        host: "127.0.0.1",
+        port: submissionPort,
+        tlsPort: submissionTlsPort,
+        allowPlaintext: true,
+        enableStartTls: false,
+        enableTls: false
+      },
       pop3: {
         host: "127.0.0.1",
-        port: 2111,
-        tlsPort: 2996,
+        port: pop3Port,
+        tlsPort: pop3TlsPort,
         allowPlaintext: true,
         enableTls: false
       }
+    },
+    outbound: {
+      greetingHostname: "mail.test.local",
+      connectTimeoutMs: 30000,
+      preferStartTls: false
     },
     tls: {
       certFile: "./missing.crt",
@@ -61,7 +91,16 @@ export async function setupServer() {
   const resolved = await loadConfig(configPath);
   const server = new PostOfficeServer(resolved, new MailboxStore(resolved));
   await server.start();
-  return { server, configPath, rootDir };
+  return {
+    server,
+    configPath,
+    rootDir,
+    smtpPort,
+    submissionPort,
+    submissionTlsPort,
+    pop3Port,
+    pop3TlsPort
+  };
 }
 
 export function connect(port) {

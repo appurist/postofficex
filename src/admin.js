@@ -226,12 +226,41 @@ function renderAdminPage(config, flash = "") {
               <input name="pop3TlsPort" type="number" value="${escapeHtml(config.server.pop3.tlsPort)}" required>
             </div>
           </div>
+          <div class="row">
+            <div>
+              <label>Submission host</label>
+              <input name="submissionHost" value="${escapeHtml(config.server.submission.host)}" required>
+            </div>
+            <div>
+              <label>Submission port</label>
+              <input name="submissionPort" type="number" value="${escapeHtml(config.server.submission.port)}" required>
+            </div>
+            <div>
+              <label>Submission TLS port</label>
+              <input name="submissionTlsPort" type="number" value="${escapeHtml(config.server.submission.tlsPort)}" required>
+            </div>
+          </div>
           <label>SMTP hostname</label>
           <input name="smtpHostname" value="${escapeHtml(config.server.smtp.hostname)}" required>
           <div class="inline"><input name="smtpAllowPlaintext" type="checkbox" ${config.server.smtp.allowPlaintext ? "checked" : ""}><span>Allow plaintext SMTP</span></div>
           <div class="inline"><input name="smtpEnableStartTls" type="checkbox" ${config.server.smtp.enableStartTls ? "checked" : ""}><span>Enable SMTP STARTTLS</span></div>
+          <div class="inline"><input name="submissionAllowPlaintext" type="checkbox" ${config.server.submission.allowPlaintext ? "checked" : ""}><span>Allow plaintext authenticated submission</span></div>
+          <div class="inline"><input name="submissionEnableStartTls" type="checkbox" ${config.server.submission.enableStartTls ? "checked" : ""}><span>Enable submission STARTTLS</span></div>
+          <div class="inline"><input name="submissionEnableTls" type="checkbox" ${config.server.submission.enableTls ? "checked" : ""}><span>Enable implicit TLS submission</span></div>
           <div class="inline"><input name="pop3AllowPlaintext" type="checkbox" ${config.server.pop3.allowPlaintext ? "checked" : ""}><span>Allow plaintext POP3 login</span></div>
           <div class="inline"><input name="pop3EnableTls" type="checkbox" ${config.server.pop3.enableTls ? "checked" : ""}><span>Enable POP3 TLS</span></div>
+          <h3>Outbound Delivery</h3>
+          <div class="row">
+            <div>
+              <label>Outbound EHLO hostname</label>
+              <input name="outboundGreetingHostname" value="${escapeHtml(config.outbound.greetingHostname)}" required>
+            </div>
+            <div>
+              <label>Outbound connect timeout (ms)</label>
+              <input name="outboundConnectTimeoutMs" type="number" value="${escapeHtml(config.outbound.connectTimeoutMs)}" required>
+            </div>
+          </div>
+          <div class="inline"><input name="outboundPreferStartTls" type="checkbox" ${config.outbound.preferStartTls ? "checked" : ""}><span>Prefer STARTTLS for outbound delivery</span></div>
           <label>TLS certificate path</label>
           <input name="tlsCertFile" value="${escapeHtml(config.tls.certFile)}" required>
           <label>TLS key path</label>
@@ -560,6 +589,14 @@ export class AdminUiServer {
             allowPlaintext: boolFromForm(form, "smtpAllowPlaintext"),
             enableStartTls: boolFromForm(form, "smtpEnableStartTls")
           },
+          submission: {
+            host: form.get("submissionHost")?.trim() || this.config.server.submission.host,
+            port: numberFromForm(form, "submissionPort", this.config.server.submission.port),
+            tlsPort: numberFromForm(form, "submissionTlsPort", this.config.server.submission.tlsPort),
+            allowPlaintext: boolFromForm(form, "submissionAllowPlaintext"),
+            enableStartTls: boolFromForm(form, "submissionEnableStartTls"),
+            enableTls: boolFromForm(form, "submissionEnableTls")
+          },
           pop3: {
             host: form.get("pop3Host")?.trim() || this.config.server.pop3.host,
             port: numberFromForm(form, "pop3Port", this.config.server.pop3.port),
@@ -567,6 +604,15 @@ export class AdminUiServer {
             allowPlaintext: boolFromForm(form, "pop3AllowPlaintext"),
             enableTls: boolFromForm(form, "pop3EnableTls")
           }
+        },
+        outbound: {
+          greetingHostname: form.get("outboundGreetingHostname")?.trim() || this.config.outbound.greetingHostname,
+          connectTimeoutMs: numberFromForm(
+            form,
+            "outboundConnectTimeoutMs",
+            this.config.outbound.connectTimeoutMs
+          ),
+          preferStartTls: boolFromForm(form, "outboundPreferStartTls")
         },
         tls: {
           certFile: form.get("tlsCertFile")?.trim() || this.config.tls.certFile,

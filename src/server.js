@@ -2,42 +2,87 @@ import { readFile } from "node:fs/promises";
 import net from "node:net";
 import tls from "node:tls";
 import { AdminUiServer } from "./admin.js";
-import { buildUserDirectory } from "./config.js";
 import { verifyPassword } from "./auth.js";
+import { buildUserDirectory } from "./config.js";
 import { logger } from "./logger.js";
+import { OutboundSmtpRelay } from "./outbound.js";
 import { ensureTrailingCrlf, stripSmtpPath } from "./util.js";
 
+function decodeBase64Utf8(value) {
+  try {
+    return Buffer.from(value, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function isMailboxAddress(address) {
+  const [localPart, domain] = address.split("@");
+  return Boolean(localPart && domain);
+}
+
 export class PostOfficeServer {
-  constructor(config, store, log = logger) {
+  constructor(config, store, log = logger, deps = {}) {
     this.config = config;
     this.store = store;
     this.log = log;
     this.users = buildUserDirectory(config);
     this.smtpServer = undefined;
+    this.submissionServer = undefined;
+    this.submissionTlsServer = undefined;
     this.pop3Server = undefined;
     this.pop3TlsServer = undefined;
     this.adminServer = undefined;
     this.tlsMaterial = undefined;
+    this.outboundRelay = deps.outboundRelay ?? new OutboundSmtpRelay(config, log, deps.outbound);
   }
 
   async start() {
     await this.store.initialize();
     await this.store.recoverAll();
 
-    if (this.config.server.smtp.enableStartTls || this.config.server.pop3.enableTls || this.config.admin?.enableTls) {
+    if (
+      this.config.server.smtp.enableStartTls ||
+      this.config.server.submission.enableStartTls ||
+      this.config.server.submission.enableTls ||
+      this.config.server.pop3.enableTls ||
+      this.config.admin?.enableTls
+    ) {
       this.tlsMaterial = {
         cert: await readFile(this.config.tls.certFile, "utf8"),
         key: await readFile(this.config.tls.keyFile, "utf8")
       };
     }
 
-    this.smtpServer = net.createServer((socket) => this.handleSmtp(socket, false));
+    this.smtpServer = net.createServer((socket) => this.handleSmtp(socket, { mode: "inbound", secure: false }));
+    this.submissionServer = net.createServer((socket) => this.handleSmtp(socket, { mode: "submission", secure: false }));
     this.pop3Server = net.createServer((socket) => this.handlePop3(socket, false, false));
 
     await Promise.all([
       this.listen(this.smtpServer, this.config.server.smtp.port, this.config.server.smtp.host),
+      this.listen(this.submissionServer, this.config.server.submission.port, this.config.server.submission.host),
       this.listen(this.pop3Server, this.config.server.pop3.port, this.config.server.pop3.host)
     ]);
+
+    if (this.config.server.submission.enableTls) {
+      if (!this.tlsMaterial) {
+        throw new Error("Submission TLS is enabled but TLS material is unavailable");
+      }
+
+      this.submissionTlsServer = tls.createServer(
+        {
+          cert: this.tlsMaterial.cert,
+          key: this.tlsMaterial.key
+        },
+        (socket) => this.handleSmtp(socket, { mode: "submission", secure: true })
+      );
+
+      await this.listen(
+        this.submissionTlsServer,
+        this.config.server.submission.tlsPort,
+        this.config.server.submission.host
+      );
+    }
 
     if (this.config.server.pop3.enableTls) {
       if (!this.tlsMaterial) {
@@ -65,6 +110,8 @@ export class PostOfficeServer {
 
     this.log.info("server.started", {
       smtpPort: this.config.server.smtp.port,
+      submissionPort: this.config.server.submission.port,
+      submissionTlsPort: this.config.server.submission.enableTls ? this.config.server.submission.tlsPort : null,
       pop3Port: this.config.server.pop3.port,
       pop3TlsPort: this.config.server.pop3.enableTls ? this.config.server.pop3.tlsPort : null,
       adminPort: this.adminServer.enabled ? this.config.admin.port : null
@@ -74,6 +121,8 @@ export class PostOfficeServer {
   async stop() {
     await Promise.all([
       this.closeServer(this.smtpServer),
+      this.closeServer(this.submissionServer),
+      this.closeServer(this.submissionTlsServer),
       this.closeServer(this.pop3Server),
       this.closeServer(this.pop3TlsServer),
       this.adminServer?.stop()
@@ -84,6 +133,7 @@ export class PostOfficeServer {
     this.config = nextConfig;
     this.store.config = nextConfig;
     this.users = buildUserDirectory(nextConfig);
+    this.outboundRelay.updateConfig(nextConfig);
     this.adminServer?.updateConfig(nextConfig);
   }
 
@@ -134,11 +184,165 @@ export class PostOfficeServer {
     });
   }
 
-  handleSmtp(rawSocket, secure, sendGreeting = true) {
+  getSmtpSettings(mode) {
+    return mode === "submission" ? this.config.server.submission : this.config.server.smtp;
+  }
+
+  isLocalRecipient(address) {
+    const [, domain] = address.split("@");
+    return Boolean(domain && this.config.domains.includes(domain) && this.users.usersByAddress.has(address));
+  }
+
+  async authenticateSubmissionUser(username, password) {
+    const normalized = username.trim().toLowerCase();
+    const user = this.users.usersByUsername.get(normalized);
+    const valid = user ? await verifyPassword(password, user.passwordHash) : false;
+    return valid ? user : null;
+  }
+
+  submissionSenderAllowed(user, address) {
+    if (!user) {
+      return false;
+    }
+
+    return user.addresses.includes(address);
+  }
+
+  async rejectInvalidSubmissionAuth(state, write, socket) {
+    state.authFailures += 1;
+    state.authContinuation = null;
+    state.authLoginUsername = null;
+
+    if (state.authFailures >= this.config.limits.maxInvalidAuthAttempts) {
+      write("535 5.7.8 too many authentication failures\r\n");
+      state.closed = true;
+      socket.end();
+      return;
+    }
+
+    write("535 5.7.8 authentication failed\r\n");
+  }
+
+  async completeSubmissionAuth(state, username, password, write, socket) {
+    const user = await this.authenticateSubmissionUser(username, password);
+    if (!user) {
+      await this.rejectInvalidSubmissionAuth(state, write, socket);
+      return;
+    }
+
+    state.authContinuation = null;
+    state.authLoginUsername = null;
+    state.authenticatedUser = user;
+    write("235 2.7.0 authentication successful\r\n");
+  }
+
+  async handleSubmissionAuthContinuation(state, line, write, socket) {
+    if (state.authContinuation === "plain") {
+      const decoded = decodeBase64Utf8(line.trim());
+      if (!decoded) {
+        await this.rejectInvalidSubmissionAuth(state, write, socket);
+        return;
+      }
+
+      const parts = decoded.split("\u0000");
+      const username = parts.length >= 3 ? parts[1] : parts[0];
+      const password = parts.length >= 3 ? parts[2] : parts[1];
+      if (!username || !password) {
+        await this.rejectInvalidSubmissionAuth(state, write, socket);
+        return;
+      }
+
+      await this.completeSubmissionAuth(state, username, password, write, socket);
+      return;
+    }
+
+    if (state.authContinuation === "login-username") {
+      const username = decodeBase64Utf8(line.trim());
+      if (!username) {
+        await this.rejectInvalidSubmissionAuth(state, write, socket);
+        return;
+      }
+
+      state.authContinuation = "login-password";
+      state.authLoginUsername = username;
+      write(`334 ${Buffer.from("Password:").toString("base64")}\r\n`);
+      return;
+    }
+
+    if (state.authContinuation === "login-password") {
+      const password = decodeBase64Utf8(line.trim());
+      if (!password) {
+        await this.rejectInvalidSubmissionAuth(state, write, socket);
+        return;
+      }
+
+      await this.completeSubmissionAuth(state, state.authLoginUsername ?? "", password, write, socket);
+    }
+  }
+
+  async handleSubmissionAuth(state, argument, write, socket) {
+    if (state.mode !== "submission") {
+      write("502 5.5.2 command not implemented\r\n");
+      return;
+    }
+
+    if (state.authenticatedUser) {
+      write("503 5.5.1 already authenticated\r\n");
+      return;
+    }
+
+    if (!state.secure && !this.config.server.submission.allowPlaintext) {
+      write("538 5.7.11 encryption required for requested authentication mechanism\r\n");
+      return;
+    }
+
+    const [mechanismRaw, initialResponse = ""] = argument.split(" ");
+    const mechanism = (mechanismRaw ?? "").toUpperCase();
+
+    if (mechanism === "PLAIN") {
+      if (initialResponse) {
+        state.authContinuation = "plain";
+        await this.handleSubmissionAuthContinuation(state, initialResponse, write, socket);
+        return;
+      }
+
+      state.authContinuation = "plain";
+      write("334 \r\n");
+      return;
+    }
+
+    if (mechanism === "LOGIN") {
+      if (initialResponse) {
+        const username = decodeBase64Utf8(initialResponse);
+        if (!username) {
+          await this.rejectInvalidSubmissionAuth(state, write, socket);
+          return;
+        }
+
+        state.authContinuation = "login-password";
+        state.authLoginUsername = username;
+        write(`334 ${Buffer.from("Password:").toString("base64")}\r\n`);
+        return;
+      }
+
+      state.authContinuation = "login-username";
+      write(`334 ${Buffer.from("Username:").toString("base64")}\r\n`);
+      return;
+    }
+
+    write("504 5.5.4 unsupported authentication mechanism\r\n");
+  }
+
+  handleSmtp(rawSocket, context, sendGreeting = true) {
     let socket = rawSocket;
     const state = {
-      secure,
+      mode: context.mode,
+      secure: context.secure,
       helo: null,
+      authenticatedUser: null,
+      authContinuation: null,
+      authLoginUsername: null,
+      authFailures: 0,
       mailFrom: null,
       rcptTo: [],
       dataMode: false,
@@ -168,12 +372,12 @@ export class PostOfficeServer {
     const processLine = async (line) => {
       if (state.dataMode) {
         if (line === ".") {
-          const rawMessage = `${state.dataLines.join("\r\n")}\r\n`;
+          const rawMessage = ensureTrailingCrlf(state.dataLines.join("\r\n"));
           state.dataMode = false;
           state.dataLines = [];
 
           try {
-            await this.persistSmtpMessage(state, rawMessage, socket);
+            await this.acceptSmtpMessage(state, rawMessage, socket);
             write("250 2.0.0 message accepted\r\n");
           } catch (error) {
             this.log.error("smtp.delivery_failed", { error: `${error}` });
@@ -194,19 +398,30 @@ export class PostOfficeServer {
         return;
       }
 
+      if (state.authContinuation) {
+        await this.handleSubmissionAuthContinuation(state, line, write, socket);
+        return;
+      }
+
       const [verb, ...rest] = line.split(" ");
       const command = (verb ?? "").toUpperCase();
       const argument = rest.join(" ").trim();
+      const smtpSettings = this.getSmtpSettings(state.mode);
 
       switch (command) {
         case "EHLO":
         case "HELO":
           state.helo = argument || "unknown";
+          state.authContinuation = null;
+          state.authLoginUsername = null;
           resetMessage();
           if (command === "EHLO") {
             const lines = [`250-${this.config.server.smtp.hostname}`];
-            if (this.config.server.smtp.enableStartTls && !state.secure) {
+            if (smtpSettings.enableStartTls && !state.secure) {
               lines.push("250-STARTTLS");
+            }
+            if (state.mode === "submission") {
+              lines.push("250-AUTH PLAIN LOGIN");
             }
             lines.push(`250 SIZE ${this.config.limits.maxMessageBytes}`);
             write(`${lines.join("\r\n")}\r\n`);
@@ -215,7 +430,7 @@ export class PostOfficeServer {
           }
           return;
         case "STARTTLS":
-          if (!this.config.server.smtp.enableStartTls) {
+          if (!smtpSettings.enableStartTls) {
             write("454 4.7.0 TLS not available\r\n");
             return;
           }
@@ -226,12 +441,22 @@ export class PostOfficeServer {
           write("220 2.0.0 Ready to start TLS\r\n");
           resetListenersForStartTls();
           socket = this.wrapSocketForStartTls(socket);
-          state.secure = true;
-          this.handleSmtp(socket, true, false);
+          this.handleSmtp(socket, { mode: state.mode, secure: true }, false);
+          return;
+        case "AUTH":
+          if (!state.helo) {
+            write("503 5.5.1 send HELO/EHLO first\r\n");
+            return;
+          }
+          await this.handleSubmissionAuth(state, argument, write, socket);
           return;
         case "MAIL":
           if (!state.helo) {
             write("503 5.5.1 send HELO/EHLO first\r\n");
+            return;
+          }
+          if (state.mode === "submission" && !state.authenticatedUser) {
+            write("530 5.7.0 authentication required\r\n");
             return;
           }
           if (!/^FROM:/i.test(argument)) {
@@ -240,6 +465,11 @@ export class PostOfficeServer {
           }
           resetMessage();
           state.mailFrom = stripSmtpPath(argument.slice(5).trim());
+          if (state.mode === "submission" && !this.submissionSenderAllowed(state.authenticatedUser, state.mailFrom)) {
+            write("553 5.7.1 sender address not owned by authenticated user\r\n");
+            state.mailFrom = null;
+            return;
+          }
           write("250 2.1.0 sender ok\r\n");
           return;
         case "RCPT":
@@ -257,12 +487,16 @@ export class PostOfficeServer {
           }
           {
             const address = stripSmtpPath(argument.slice(3).trim());
-            const user = this.users.usersByAddress.get(address);
-            const [, domain] = address.split("@");
-            if (!domain || !this.config.domains.includes(domain) || !user) {
+            if (!isMailboxAddress(address)) {
+              write("501 5.1.3 bad recipient address syntax\r\n");
+              return;
+            }
+
+            if (state.mode === "inbound" && !this.isLocalRecipient(address)) {
               write("550 5.1.1 recipient rejected\r\n");
               return;
             }
+
             state.rcptTo.push(address);
             write("250 2.1.5 recipient ok\r\n");
           }
@@ -277,6 +511,8 @@ export class PostOfficeServer {
           write("354 End data with <CR><LF>.<CR><LF>\r\n");
           return;
         case "RSET":
+          state.authContinuation = null;
+          state.authLoginUsername = null;
           resetMessage();
           write("250 2.0.0 reset state\r\n");
           return;
@@ -315,27 +551,55 @@ export class PostOfficeServer {
     });
   }
 
-  async persistSmtpMessage(state, rawMessage, socket) {
+  async storeLocalMessage(recipients, state, rawMessage, socket, event) {
     const delivered = new Set();
-    for (const address of state.rcptTo) {
+
+    for (const address of recipients) {
       const user = this.users.usersByAddress.get(address);
       if (!user || delivered.has(user.mailbox)) {
         continue;
       }
+
       delivered.add(user.mailbox);
       await this.store.deliver(user.mailbox, {
         mailFrom: state.mailFrom,
-        rcptTo: state.rcptTo,
-        rawMessage: ensureTrailingCrlf(rawMessage),
+        rcptTo: recipients,
+        rawMessage,
         remoteAddress: socket.remoteAddress ?? null
       });
     }
 
-    this.log.info("smtp.message_stored", {
-      recipients: state.rcptTo,
+    this.log.info(event, {
+      recipients,
       secure: state.secure,
-      remoteAddress: socket.remoteAddress ?? null
+      remoteAddress: socket.remoteAddress ?? null,
+      username: state.authenticatedUser?.username ?? null
     });
+  }
+
+  async acceptSmtpMessage(state, rawMessage, socket) {
+    if (state.mode === "submission") {
+      if (state.rcptTo.every((address) => this.isLocalRecipient(address))) {
+        await this.storeLocalMessage(state.rcptTo, state, rawMessage, socket, "smtp.submission_stored");
+        return;
+      }
+
+      await this.outboundRelay.deliver({
+        mailFrom: state.mailFrom,
+        rcptTo: state.rcptTo,
+        rawMessage
+      });
+
+      this.log.info("smtp.submission_sent", {
+        recipients: state.rcptTo,
+        secure: state.secure,
+        remoteAddress: socket.remoteAddress ?? null,
+        username: state.authenticatedUser?.username ?? null
+      });
+      return;
+    }
+
+    await this.storeLocalMessage(state.rcptTo, state, rawMessage, socket, "smtp.message_stored");
   }
 
   handlePop3(rawSocket, secure, implicitTls, sendGreeting = true) {

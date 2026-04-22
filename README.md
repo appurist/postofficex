@@ -1,10 +1,12 @@
 # postofficex
 
-PostOfficeX is a Bun-based inbound mail server that accepts email over SMTP, stores each raw message on local disk, and exposes POP3 so clients can fetch stored mail.
+PostOfficeX is a Bun-based mail server that accepts inbound email over SMTP, supports authenticated SMTP client submission for outbound mail, stores local messages on disk, and exposes POP3 so clients can fetch stored mail.
 
 ## Features
 
 - SMTP receive for configured local domains only
+- Authenticated SMTP submission for mail clients on ports `587` and `465`
+- Outbound SMTP delivery to recipient MX hosts
 - Per-recipient mailboxes from file config
 - Raw `.eml` message preservation under `data/`
 - Attachment metadata extraction into sidecar JSON
@@ -26,7 +28,7 @@ bun -e "console.log(await Bun.password.hash('change-me'))"
 
 3. Put the hash into `config.json`.
 4. Update domains, users, ports, and TLS paths as needed.
-   The example config does not create any mail users by default, so define at least one user before testing SMTP or POP3.
+   The example config does not create any mail users by default, so define at least one user before testing SMTP, submission, or POP3.
    To enable the admin UI, set `admin.password` or `admin.passwordHash` in `config.json`.
 5. Start the server:
 
@@ -83,9 +85,25 @@ Messages are stored beneath the configured storage root, by default `./data`:
 - `data/mailboxes/<mailbox>/tmp/*.tmp`: in-progress SMTP writes
 - `data/mailboxes/<mailbox>/meta/*.json`: POP3 metadata, envelope data, and attachment metadata
 
+## Client Submission
+
+Use the submission listeners for mail clients:
+
+- `587`: SMTP submission with `AUTH` and optional `STARTTLS`
+- `465`: implicit TLS SMTP submission
+
+Submission uses the configured mail users:
+
+- `username` is the SMTP `AUTH` login name
+- `passwordHash` is used for SMTP `AUTH` and POP3 `PASS`
+- submitted `MAIL FROM` must match one of that user's configured `addresses`
+
+Local-only submitted messages are stored directly in local mailboxes. Submitted messages with external recipients are delivered outbound to the recipient domain's MX hosts.
+
 ## Notes
 
-- The server only accepts mail for explicitly configured local addresses.
-- It does not relay outbound mail.
+- The inbound SMTP listener only accepts mail for explicitly configured local addresses.
+- The submission listener requires authentication and is intended for trusted mail clients.
+- Outbound delivery goes directly to recipient MX hosts. There is no unauthenticated open relay and no smarthost relay configuration.
 - It does not implement IMAP, spam filtering, antivirus scanning, or DKIM.
 - For internet-facing deployments, provide real certificates and bind to standard ports through your service manager or container runtime.

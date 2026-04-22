@@ -19,6 +19,35 @@ export async function loadConfig(configPath) {
     ...parsed,
     configPath: absolutePath,
     configDir,
+    server: {
+      smtp: {
+        host: parsed.server?.smtp?.host ?? "0.0.0.0",
+        port: parsed.server?.smtp?.port ?? 25,
+        hostname: parsed.server?.smtp?.hostname ?? "mail.example.test",
+        allowPlaintext: parsed.server?.smtp?.allowPlaintext ?? true,
+        enableStartTls: parsed.server?.smtp?.enableStartTls ?? true
+      },
+      submission: {
+        host: parsed.server?.submission?.host ?? "0.0.0.0",
+        port: parsed.server?.submission?.port ?? 587,
+        tlsPort: parsed.server?.submission?.tlsPort ?? 465,
+        allowPlaintext: parsed.server?.submission?.allowPlaintext ?? false,
+        enableStartTls: parsed.server?.submission?.enableStartTls ?? true,
+        enableTls: parsed.server?.submission?.enableTls ?? true
+      },
+      pop3: {
+        host: parsed.server?.pop3?.host ?? "0.0.0.0",
+        port: parsed.server?.pop3?.port ?? 110,
+        tlsPort: parsed.server?.pop3?.tlsPort ?? 995,
+        allowPlaintext: parsed.server?.pop3?.allowPlaintext ?? false,
+        enableTls: parsed.server?.pop3?.enableTls ?? true
+      }
+    },
+    outbound: {
+      greetingHostname: parsed.outbound?.greetingHostname ?? parsed.server?.smtp?.hostname ?? "mail.example.test",
+      connectTimeoutMs: parsed.outbound?.connectTimeoutMs ?? 30000,
+      preferStartTls: parsed.outbound?.preferStartTls ?? true
+    },
     admin: {
       host: parsed.admin?.host ?? "0.0.0.0",
       port: parsed.admin?.port ?? 80,
@@ -65,6 +94,7 @@ function toConfigPath(configDir, value) {
 export function serializeConfig(config) {
   return {
     server: config.server,
+    outbound: config.outbound,
     tls: {
       certFile: toConfigPath(config.configDir, config.tls.certFile),
       keyFile: toConfigPath(config.configDir, config.tls.keyFile)

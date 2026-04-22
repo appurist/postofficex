@@ -7,6 +7,14 @@
       "allowPlaintext": true,
       "enableStartTls": true
     },
+    "submission": {
+      "host": "0.0.0.0",
+      "port": 587,
+      "tlsPort": 465,
+      "allowPlaintext": false,
+      "enableStartTls": true,
+      "enableTls": true
+    },
     "pop3": {
       "host": "0.0.0.0",
       "port": 110,
@@ -14,6 +22,11 @@
       "allowPlaintext": false,
       "enableTls": true
     }
+  },
+  "outbound": {
+    "greetingHostname": "mail.example.test",
+    "connectTimeoutMs": 30000,
+    "preferStartTls": true
   },
   "tls": {
     "certFile": "./certs/server.crt",
