@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import net from "node:net";
 import tls from "node:tls";
+import { AdminUiServer } from "./admin.js";
 import { buildUserDirectory } from "./config.js";
 import { verifyPassword } from "./auth.js";
 import { logger } from "./logger.js";
@@ -15,6 +16,7 @@ export class PostOfficeServer {
     this.smtpServer = undefined;
     this.pop3Server = undefined;
     this.pop3TlsServer = undefined;
+    this.adminServer = undefined;
     this.tlsMaterial = undefined;
   }
 
@@ -53,10 +55,18 @@ export class PostOfficeServer {
       await this.listen(this.pop3TlsServer, this.config.server.pop3.tlsPort, this.config.server.pop3.host);
     }
 
+    this.adminServer = new AdminUiServer(
+      this.config,
+      (nextConfig) => this.applyConfig(nextConfig),
+      this.log
+    );
+    await this.adminServer.start();
+
     this.log.info("server.started", {
       smtpPort: this.config.server.smtp.port,
       pop3Port: this.config.server.pop3.port,
-      pop3TlsPort: this.config.server.pop3.enableTls ? this.config.server.pop3.tlsPort : null
+      pop3TlsPort: this.config.server.pop3.enableTls ? this.config.server.pop3.tlsPort : null,
+      adminPort: this.adminServer.enabled ? this.config.admin.port : null
     });
   }
 
@@ -64,8 +74,16 @@ export class PostOfficeServer {
     await Promise.all([
       this.closeServer(this.smtpServer),
       this.closeServer(this.pop3Server),
-      this.closeServer(this.pop3TlsServer)
+      this.closeServer(this.pop3TlsServer),
+      this.adminServer?.stop()
     ]);
+  }
+
+  applyConfig(nextConfig) {
+    this.config = nextConfig;
+    this.store.config = nextConfig;
+    this.users = buildUserDirectory(nextConfig);
+    this.adminServer?.updateConfig(nextConfig);
   }
 
   async listen(server, port, host) {

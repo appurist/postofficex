@@ -11,6 +11,7 @@ PostOfficeX is a Bun-based inbound mail server that accepts email over SMTP, sto
 - POP3 retrieval with `STAT`, `LIST`, `UIDL`, `RETR`, `DELE`, `RSET`, `QUIT`
 - Standard POP3 delete-on-`QUIT` semantics
 - Optional SMTP `STARTTLS` and POP3 implicit TLS / `STLS`
+- Optional admin HTML UI for editing global settings and users
 
 ## Quick Start
 
@@ -23,6 +24,7 @@ bun -e "console.log(await Bun.password.hash('change-me'))"
 
 3. Put the hash into `config.json`.
 4. Update domains, users, ports, and TLS paths as needed.
+   To enable the admin UI, set `admin.password` or `admin.passwordHash` in `config.json`.
 5. Start the server:
 
 ```bash
