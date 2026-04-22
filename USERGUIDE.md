@@ -181,6 +181,29 @@ Recommended:
 
 If both are set, `passwordHash` is used for authentication.
 
+When the admin listener is enabled, it also provides an unauthenticated health endpoint on the same host and port:
+
+```text
+GET /ping
+```
+
+Response:
+
+```json
+{"status":"OK","name":"postofficex"}
+```
+
+This is useful for:
+
+- uptime checks
+- container health checks
+- external monitoring probes
+
+Important:
+
+- `/ping` is not available unless the admin listener is enabled.
+- If `admin.password` and `admin.passwordHash` are both empty, neither the admin UI nor `/ping` will be available.
+
 ## Defining Users
 
 Each entry in `users` defines:

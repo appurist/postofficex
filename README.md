@@ -12,6 +12,7 @@ PostOfficeX is a Bun-based inbound mail server that accepts email over SMTP, sto
 - Standard POP3 delete-on-`QUIT` semantics
 - Optional SMTP `STARTTLS` and POP3 implicit TLS / `STLS`
 - Optional admin HTML UI for editing global settings and users
+- Optional admin `/ping` JSON health endpoint on the admin port
 
 ## Quick Start
 
@@ -50,6 +51,27 @@ On Windows, Bun compile output is an `.exe`. If you build on Windows, expect `po
 ```bash
 bun build --compile --target=bun-windows-x64 ./src/index.js --outfile postofficex.exe
 ```
+
+## Health Check
+
+When the admin listener is enabled, it also exposes an unauthenticated health endpoint:
+
+```text
+GET /ping
+```
+
+Response:
+
+```json
+{"status":"OK","name":"postofficex"}
+```
+
+This is intended for uptime checks and basic status monitoring on the admin port.
+
+Important:
+
+- `/ping` is only available when the admin listener is enabled.
+- The admin listener only starts when `admin.password` or `admin.passwordHash` is set.
 
 ## Storage Layout
 

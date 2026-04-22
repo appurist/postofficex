@@ -187,7 +187,7 @@ function renderAdminPage(config, flash = "") {
   const body = `<div class="topbar">
       <div>
         <h1>PostOfficeX Admin</h1>
-        <p>Admin UI changes are written back to <span class="mono">${escapeHtml(config.configPath)}</span>. Listener host, port, and TLS material changes may require a restart.</p>
+        <p>Admin UI changes are written back to <span class="mono">${escapeHtml(config.configPath)}</span>.<br>Listener host, port, and TLS material changes may require a restart.</p>
       </div>
       <form method="post" action="/logout">
         <button class="secondary" type="submit">Log out</button>
@@ -422,6 +422,12 @@ export class AdminUiServer {
     const method = request.method ?? "GET";
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
     const flash = this.consumeFlash(request, response);
+
+    if (url.pathname === "/ping" && method === "GET") {
+      response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({ status: "OK", name: "postofficex" }));
+      return;
+    }
 
     if (url.pathname === "/login" && method === "GET") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });

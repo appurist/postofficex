@@ -93,6 +93,16 @@ afterEach(async () => {
 });
 
 describe("admin ui", () => {
+  test("serves /ping without authentication", async () => {
+    activeServer = await setupAdminServer();
+
+    const response = await fetch(`http://127.0.0.1:${activeServer.adminPort}/ping`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.json()).toEqual({ status: "OK", name: "postofficex" });
+  });
+
   test("requires login and renders dashboard after authentication", async () => {
     activeServer = await setupAdminServer();
 
