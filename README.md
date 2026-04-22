@@ -13,6 +13,7 @@ PostOfficeX is a Bun-based inbound mail server that accepts email over SMTP, sto
 - Optional SMTP `STARTTLS` and POP3 implicit TLS / `STLS`
 - Optional admin HTML UI for editing global settings and users
 - Optional admin `/ping` JSON health endpoint on the admin port
+- Optional HTTPS for the admin listener using the configured TLS certificate and key
 
 ## Quick Start
 

@@ -58,6 +58,7 @@ If the config file is missing or invalid, startup fails with a configuration err
   "admin": {
     "host": "0.0.0.0",
     "port": 80,
+    "enableTls": false,
     "password": "",
     "passwordHash": ""
   },
@@ -170,6 +171,7 @@ The admin UI is disabled by default. It becomes active when either `admin.passwo
 
 - `host`: HTTP bind address for the admin UI.
 - `port`: HTTP port for the admin UI. Default is `80`.
+- `enableTls`: Enables HTTPS for the admin listener using `tls.certFile` and `tls.keyFile`.
 - `password`: Plaintext admin password. Supported, but less safe.
 - `passwordHash`: Bun-compatible password hash for the admin login.
 
@@ -177,9 +179,12 @@ Recommended:
 
 - leave `password` empty
 - store only `passwordHash`
+- set `enableTls` to `true` when exposing the admin UI over a network
 - bind the admin UI to a trusted network or protect it with a reverse proxy
 
 If both are set, `passwordHash` is used for authentication.
+
+If `admin.enableTls` is `true`, the admin listener serves HTTPS and reuses the same certificate and key files configured under `tls`.
 
 When the admin listener is enabled, it also provides an unauthenticated health endpoint on the same host and port:
 

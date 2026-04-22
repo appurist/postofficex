@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import https from "node:https";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,35 @@ import { PostOfficeServer } from "../src/server.js";
 import { MailboxStore } from "../src/storage.js";
 
 let activeServer = null;
+
+function httpsRequest(url, { method = "GET", headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const request = https.request(
+      url,
+      {
+        method,
+        headers,
+        rejectUnauthorized: false
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => {
+          resolve({
+            statusCode: response.statusCode,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString("utf8")
+          });
+        });
+      }
+    );
+    request.on("error", reject);
+    if (body) {
+      request.write(body);
+    }
+    request.end();
+  });
+}
 
 async function reservePort() {
   return await new Promise((resolve, reject) => {
@@ -21,7 +51,12 @@ async function reservePort() {
   });
 }
 
-async function setupAdminServer({ plaintextAdminPassword = false, adminLogRequests = false, log = undefined } = {}) {
+async function setupAdminServer({
+  plaintextAdminPassword = false,
+  adminLogRequests = false,
+  adminEnableTls = false,
+  log = undefined
+} = {}) {
   const rootDir = await mkdtemp(join(tmpdir(), "postofficex-admin-"));
   const userPasswordHash = await Bun.password.hash("secret123");
   const adminPasswordHash = plaintextAdminPassword ? "" : await Bun.password.hash("adminpw");
@@ -47,8 +82,8 @@ async function setupAdminServer({ plaintextAdminPassword = false, adminLogReques
       }
     },
     tls: {
-      certFile: "./missing.crt",
-      keyFile: "./missing.key"
+      certFile: join(process.cwd(), "certs", "server.crt"),
+      keyFile: join(process.cwd(), "certs", "server.key")
     },
     limits: {
       maxMessageBytes: 1024 * 1024,
@@ -63,6 +98,7 @@ async function setupAdminServer({ plaintextAdminPassword = false, adminLogReques
     admin: {
       host: "127.0.0.1",
       port: adminPort,
+      enableTls: adminEnableTls,
       logRequests: adminLogRequests,
       password: plaintextAdminPassword ? "adminpw" : "",
       passwordHash: adminPasswordHash
@@ -102,6 +138,16 @@ describe("admin ui", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(await response.json()).toEqual({ status: "OK", name: "postofficex" });
+  });
+
+  test("serves /ping over https when admin tls is enabled", async () => {
+    activeServer = await setupAdminServer({ adminEnableTls: true });
+
+    const response = await httpsRequest(`https://127.0.0.1:${activeServer.adminPort}/ping`);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/json");
+    expect(JSON.parse(response.body)).toEqual({ status: "OK", name: "postofficex" });
   });
 
   test("logs admin requests when request logging is enabled but skips /ping", async () => {
@@ -203,6 +249,7 @@ describe("admin ui", () => {
         domains: "example.test\nexample.net",
         adminHost: "127.0.0.1",
         adminPort: String(activeServer.adminPort),
+        adminEnableTls: "on",
         adminLogRequests: "on"
       }).toString()
     });
@@ -225,6 +272,7 @@ describe("admin ui", () => {
     const saved = JSON.parse(await readFile(activeServer.configPath, "utf8"));
     expect(saved.server.smtp.hostname).toBe("mail.changed.test");
     expect(saved.domains).toEqual(["example.test", "example.net"]);
+    expect(saved.admin.enableTls).toBe(true);
     expect(saved.admin.logRequests).toBe(true);
     expect(saved.users.some((user) => user.username === "bob")).toBe(true);
     expect(saved.users.find((user) => user.username === "bob").addresses).toEqual([

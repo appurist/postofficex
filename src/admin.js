@@ -1,5 +1,6 @@
 import { timingSafeEqual, createHash, randomUUID } from "node:crypto";
 import http from "node:http";
+import https from "node:https";
 import { saveConfig } from "./config.js";
 import { buildUserDirectory } from "./config.js";
 
@@ -53,6 +54,10 @@ function redirect(response, location) {
 
 function authFingerprint(adminConfig) {
   return createHash("sha256").update(adminConfig?.passwordHash || adminConfig?.password || "").digest("hex");
+}
+
+function adminCookieAttributes(adminConfig) {
+  return `Path=/; HttpOnly; SameSite=Lax${adminConfig?.enableTls ? "; Secure" : ""}`;
 }
 
 export async function verifyAdminPassword(input, adminConfig) {
@@ -270,6 +275,7 @@ function renderAdminPage(config, flash = "") {
               <input name="adminPort" type="number" value="${escapeHtml(config.admin?.port ?? 80)}" required>
             </div>
           </div>
+          <div class="inline"><input name="adminEnableTls" type="checkbox" ${config.admin?.enableTls ? "checked" : ""}><span>Enable HTTPS for the admin listener</span></div>
           <div class="inline"><input name="adminLogRequests" type="checkbox" ${config.admin?.logRequests ? "checked" : ""}><span>Log all admin route requests and response codes</span></div>
           <label>New admin password</label>
           <input name="adminPassword" type="password" placeholder="Leave blank to keep the current admin password">
@@ -321,10 +327,11 @@ function renderAdminPage(config, flash = "") {
 }
 
 export class AdminUiServer {
-  constructor(config, onConfigUpdated, log) {
+  constructor(config, onConfigUpdated, log, tlsMaterial) {
     this.config = config;
     this.onConfigUpdated = onConfigUpdated;
     this.log = log;
+    this.tlsMaterial = tlsMaterial;
     this.server = undefined;
     this.sessions = new Map();
   }
@@ -338,9 +345,25 @@ export class AdminUiServer {
       return;
     }
 
-    this.server = http.createServer((request, response) => {
-      void this.handleRequest(request, response);
-    });
+    if (this.config.admin?.enableTls) {
+      if (!this.tlsMaterial) {
+        throw new Error("Admin HTTPS is enabled but TLS material is unavailable");
+      }
+
+      this.server = https.createServer(
+        {
+          cert: this.tlsMaterial.cert,
+          key: this.tlsMaterial.key
+        },
+        (request, response) => {
+          void this.handleRequest(request, response);
+        }
+      );
+    } else {
+      this.server = http.createServer((request, response) => {
+        void this.handleRequest(request, response);
+      });
+    }
 
     await new Promise((resolve, reject) => {
       const onError = (error) => {
@@ -360,7 +383,8 @@ export class AdminUiServer {
 
     this.log.info("admin.started", {
       adminHost: this.config.admin.host,
-      adminPort: this.config.admin.port
+      adminPort: this.config.admin.port,
+      adminTls: this.config.admin.enableTls
     });
   }
 
@@ -415,7 +439,7 @@ export class AdminUiServer {
   }
 
   setFlashCookie(response, message) {
-    response.setHeader("Set-Cookie", `postofficex_flash=${encodeURIComponent(message)}; Path=/; HttpOnly; SameSite=Lax`);
+    response.setHeader("Set-Cookie", `postofficex_flash=${encodeURIComponent(message)}; ${adminCookieAttributes(this.config.admin)}`);
   }
 
   sendResponse(request, response, statusCode, headers, body = "") {
@@ -436,7 +460,7 @@ export class AdminUiServer {
     const cookies = parseCookie(request.headers.cookie);
     const flash = cookies.postofficex_flash ? decodeURIComponent(cookies.postofficex_flash) : "";
     if (flash) {
-      response.setHeader("Set-Cookie", "postofficex_flash=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
+      response.setHeader("Set-Cookie", `postofficex_flash=; ${adminCookieAttributes(this.config.admin)}; Max-Age=0`);
     }
     return flash;
   }
@@ -491,7 +515,7 @@ export class AdminUiServer {
       });
       this.sendResponse(request, response, 302, {
         Location: "/",
-        "Set-Cookie": `postofficex_admin=${token}; Path=/; HttpOnly; SameSite=Lax`
+        "Set-Cookie": `postofficex_admin=${token}; ${adminCookieAttributes(this.config.admin)}`
       });
       return;
     }
@@ -519,7 +543,7 @@ export class AdminUiServer {
       }
       this.sendResponse(request, response, 302, {
         Location: "/login",
-        "Set-Cookie": "postofficex_admin=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+        "Set-Cookie": `postofficex_admin=; ${adminCookieAttributes(this.config.admin)}; Max-Age=0`
       });
       return;
     }
@@ -562,6 +586,7 @@ export class AdminUiServer {
         admin: {
           host: form.get("adminHost")?.trim() || this.config.admin.host,
           port: numberFromForm(form, "adminPort", this.config.admin.port),
+          enableTls: boolFromForm(form, "adminEnableTls"),
           logRequests: boolFromForm(form, "adminLogRequests"),
           password: this.config.admin.password,
           passwordHash: this.config.admin.passwordHash

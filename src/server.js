@@ -24,7 +24,7 @@ export class PostOfficeServer {
     await this.store.initialize();
     await this.store.recoverAll();
 
-    if (this.config.server.smtp.enableStartTls || this.config.server.pop3.enableTls) {
+    if (this.config.server.smtp.enableStartTls || this.config.server.pop3.enableTls || this.config.admin?.enableTls) {
       this.tlsMaterial = {
         cert: await readFile(this.config.tls.certFile, "utf8"),
         key: await readFile(this.config.tls.keyFile, "utf8")
@@ -58,7 +58,8 @@ export class PostOfficeServer {
     this.adminServer = new AdminUiServer(
       this.config,
       (nextConfig) => this.applyConfig(nextConfig),
-      this.log
+      this.log,
+      this.tlsMaterial
     );
     await this.adminServer.start();
 

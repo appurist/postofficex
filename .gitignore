@@ -8,5 +8,6 @@ postofficex
 postofficex.exe
 
 config.json
-certs/
 data/
+certs/
+certsaved/
