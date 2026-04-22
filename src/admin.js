@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { timingSafeEqual, createHash, randomUUID } from "node:crypto";
 import http from "node:http";
 import { saveConfig } from "./config.js";
 import { buildUserDirectory } from "./config.js";
@@ -51,7 +51,15 @@ function redirect(response, location) {
   response.end();
 }
 
+function authFingerprint(adminConfig) {
+  return createHash("sha256").update(adminConfig?.passwordHash || adminConfig?.password || "").digest("hex");
+}
+
 export async function verifyAdminPassword(input, adminConfig) {
+  if (adminConfig?.password) {
+    return input === adminConfig.password;
+  }
+
   if (adminConfig?.passwordHash) {
     try {
       return await Bun.password.verify(input, adminConfig.passwordHash);
@@ -358,8 +366,29 @@ export class AdminUiServer {
   }
 
   updateConfig(config) {
+    const previousFingerprint = authFingerprint(this.config.admin);
     this.config = config;
-    this.sessions.clear();
+    if (!timingSafeEqual(Buffer.from(previousFingerprint), Buffer.from(authFingerprint(config.admin)))) {
+      this.sessions.clear();
+    }
+  }
+
+  async migrateAdminPasswordIfNeeded() {
+    if (!this.config.admin?.password) {
+      return;
+    }
+
+    const nextConfig = {
+      ...this.config,
+      admin: {
+        ...this.config.admin,
+        password: "",
+        passwordHash: await Bun.password.hash(this.config.admin.password)
+      }
+    };
+
+    await saveConfig(nextConfig);
+    this.onConfigUpdated(nextConfig);
   }
 
   isAuthenticated(request) {
@@ -410,9 +439,11 @@ export class AdminUiServer {
         return;
       }
 
+      await this.migrateAdminPasswordIfNeeded();
+
       const token = randomUUID();
       this.sessions.set(token, {
-        fingerprint: createHash("sha256").update(this.config.admin.passwordHash || this.config.admin.password).digest("hex")
+        fingerprint: authFingerprint(this.config.admin)
       });
       response.writeHead(302, {
         Location: "/",
