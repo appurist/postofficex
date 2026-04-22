@@ -435,6 +435,13 @@ export class AdminUiServer {
     }
   }
 
+  updateTlsMaterial(tlsMaterial) {
+    this.tlsMaterial = tlsMaterial;
+    if (this.config.admin?.enableTls && this.server?.setSecureContext && tlsMaterial) {
+      this.server.setSecureContext(tlsMaterial);
+    }
+  }
+
   async migrateAdminPasswordIfNeeded() {
     if (!this.config.admin?.password) {
       return;

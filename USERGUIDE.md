@@ -233,6 +233,55 @@ If both are set, `passwordHash` is used for authentication.
 
 If `admin.enableTls` is `true`, the admin listener serves HTTPS and reuses the same certificate and key files configured under `tls`.
 
+### Let's Encrypt Renewal
+
+If you keep `tls.certFile` and `tls.keyFile` pointed at `./certs/server.crt` and `./certs/server.key`, you can use the included Certbot scripts to populate that folder with Let’s Encrypt certificates.
+
+Recommended startup:
+
+```bash
+POSTOFFICEX_CONFIG=./config.json POSTOFFICEX_PID_FILE=./postofficex.pid bun run src/index.js
+```
+
+Issue the first certificate:
+
+```bash
+./scripts/install-letsencrypt.sh mail.postofficex.com admin@postofficex.com
+```
+
+Or, when another web server already serves ACME challenges:
+
+```bash
+./scripts/install-letsencrypt.sh mail.postofficex.com admin@postofficex.com /var/www/certbot
+```
+
+The Certbot deploy hook copies the renewed certificate and key into `certs/` and signals the process with `SIGHUP`. PostOfficeX then reloads the TLS files from disk for:
+
+- SMTP `STARTTLS`
+- submission TLS on `465`
+- POP3 TLS on `995`
+- admin HTTPS
+
+### systemd Service
+
+The repo includes `postofficex.service` for hosts that run PostOfficeX under `systemd`.
+
+It sets:
+
+- `WorkingDirectory=/root/postofficex`
+- `POSTOFFICEX_CONFIG=/root/postofficex/config.json`
+- `POSTOFFICEX_PID_FILE=/root/postofficex/postofficex.pid`
+
+Install it with:
+
+```bash
+cp /root/postofficex/postofficex.service /etc/systemd/system/postofficex.service
+systemctl daemon-reload
+systemctl enable --now postofficex.service
+```
+
+When the unit is active, the Let’s Encrypt deploy hook will reload the service through `systemctl` after certificate renewals.
+
 When the admin listener is enabled, it also provides an unauthenticated health endpoint on the same host and port:
 
 ```text

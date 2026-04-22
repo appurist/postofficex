@@ -107,3 +107,57 @@ Local-only submitted messages are stored directly in local mailboxes. Submitted 
 - Outbound delivery goes directly to recipient MX hosts. There is no unauthenticated open relay and no smarthost relay configuration.
 - It does not implement IMAP, spam filtering, antivirus scanning, or DKIM.
 - For internet-facing deployments, provide real certificates and bind to standard ports through your service manager or container runtime.
+
+## Let's Encrypt
+
+The server reads its TLS material from the paths in `config.json`. Your current config already points to:
+
+```json
+"tls": {
+  "certFile": "./certs/server.crt",
+  "keyFile": "./certs/server.key"
+}
+```
+
+This repo now includes a Certbot flow that keeps those filenames stable while replacing the Cloudflare edge certs with real Let’s Encrypt certificates:
+
+1. Install `certbot` on the host.
+2. Start PostOfficeX with a PID file so the deploy hook can signal it:
+
+```bash
+POSTOFFICEX_CONFIG=./config.json POSTOFFICEX_PID_FILE=./postofficex.pid bun run src/index.js
+```
+
+3. Issue the certificate for your mail host:
+
+```bash
+./scripts/install-letsencrypt.sh mail.postofficex.com admin@postofficex.com
+```
+
+If port `80` is already serving `/.well-known/acme-challenge/`, pass that webroot as a third argument instead of using Certbot standalone mode.
+
+The Certbot deploy hook copies:
+
+- `fullchain.pem` to `certs/server.crt`
+- `privkey.pem` to `certs/server.key`
+
+After renewals, the hook sends `SIGHUP` to the running process through `postofficex.pid`, and PostOfficeX reloads the certificate from disk without a full restart.
+
+## systemd
+
+This repo also includes a `systemd` unit at `./postofficex.service`. It runs the server from the repo root with:
+
+```bash
+POSTOFFICEX_CONFIG=/root/postofficex/config.json
+POSTOFFICEX_PID_FILE=/root/postofficex/postofficex.pid
+```
+
+Install and enable it with:
+
+```bash
+sudo cp ./postofficex.service /etc/systemd/system/postofficex.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now postofficex.service
+```
+
+The service defines `ExecReload=/bin/kill -HUP $MAINPID`, and the Certbot deploy hook will prefer reloading `postofficex.service` through `systemctl` when that unit is active.

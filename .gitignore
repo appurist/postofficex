@@ -1,8 +1,10 @@
 node_modules/
 dist/
 
+\.codex
 *.log
 *.bun-build
+*.pid
 
 postofficex
 postofficex.exe

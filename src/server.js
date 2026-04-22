@@ -45,21 +45,29 @@ export class PostOfficeServer {
     this.stopping = false;
   }
 
+  isTlsEnabled(config = this.config) {
+    return Boolean(
+      config.server.smtp.enableStartTls ||
+        config.server.submission.enableStartTls ||
+        config.server.submission.enableTls ||
+        config.server.pop3.enableTls ||
+        config.admin?.enableTls
+    );
+  }
+
+  async loadTlsMaterial() {
+    return {
+      cert: await readFile(this.config.tls.certFile, "utf8"),
+      key: await readFile(this.config.tls.keyFile, "utf8")
+    };
+  }
+
   async start() {
     await this.store.initialize();
     await this.store.recoverAll();
 
-    if (
-      this.config.server.smtp.enableStartTls ||
-      this.config.server.submission.enableStartTls ||
-      this.config.server.submission.enableTls ||
-      this.config.server.pop3.enableTls ||
-      this.config.admin?.enableTls
-    ) {
-      this.tlsMaterial = {
-        cert: await readFile(this.config.tls.certFile, "utf8"),
-        key: await readFile(this.config.tls.keyFile, "utf8")
-      };
+    if (this.isTlsEnabled()) {
+      this.tlsMaterial = await this.loadTlsMaterial();
     }
 
     this.smtpServer = net.createServer((socket) => {
@@ -139,6 +147,27 @@ export class PostOfficeServer {
       pop3TlsPort: this.config.server.pop3.enableTls ? this.config.server.pop3.tlsPort : null,
       adminPort: this.adminServer.enabled ? this.config.admin.port : null
     });
+  }
+
+  async reloadTlsMaterial() {
+    if (!this.isTlsEnabled()) {
+      this.tlsMaterial = undefined;
+      return false;
+    }
+
+    const nextTlsMaterial = await this.loadTlsMaterial();
+    this.tlsMaterial = nextTlsMaterial;
+
+    if (this.submissionTlsServer?.setSecureContext) {
+      this.submissionTlsServer.setSecureContext(nextTlsMaterial);
+    }
+
+    if (this.pop3TlsServer?.setSecureContext) {
+      this.pop3TlsServer.setSecureContext(nextTlsMaterial);
+    }
+
+    this.adminServer?.updateTlsMaterial(nextTlsMaterial);
+    return true;
   }
 
   async stop() {

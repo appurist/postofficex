@@ -1,0 +1,19 @@
+[Unit]
+Description=PostOfficeX mail server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/postofficex
+Environment=POSTOFFICEX_CONFIG=/root/postofficex/config.json
+Environment=POSTOFFICEX_PID_FILE=/root/postofficex/postofficex.pid
+ExecStart=/root/.bun/bin/bun run src/index.js
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
