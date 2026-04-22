@@ -2,17 +2,17 @@
   "server": {
     "smtp": {
       "host": "0.0.0.0",
-      "port": 2525,
+      "port": 25,
       "hostname": "mail.example.test",
       "allowPlaintext": true,
-      "enableStartTls": false
+      "enableStartTls": true
     },
     "pop3": {
       "host": "0.0.0.0",
-      "port": 2110,
-      "tlsPort": 2995,
-      "allowPlaintext": true,
-      "enableTls": false
+      "port": 110,
+      "tlsPort": 995,
+      "allowPlaintext": false,
+      "enableTls": true
     }
   },
   "tls": {

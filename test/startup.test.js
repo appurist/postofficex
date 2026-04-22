@@ -31,4 +31,13 @@ describe("startup errors", () => {
     expect(message).toContain("mail.postofficex.com:80");
     expect(message).toContain("EADDRINUSE");
   });
+
+  test("preserves explicit admin listen failure context", () => {
+    const error = new Error("Failed to listen on 0.0.0.0:80: Failed to listen at 0.0.0.0");
+
+    const message = formatStartupError(error, "/srv/postofficex/config.json");
+
+    expect(message).toContain("0.0.0.0:80");
+    expect(message).toContain("Failed to listen at 0.0.0.0");
+  });
 });

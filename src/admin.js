@@ -343,9 +343,17 @@ export class AdminUiServer {
     });
 
     await new Promise((resolve, reject) => {
-      this.server.once("error", reject);
+      const onError = (error) => {
+        this.server.off("error", onError);
+        const wrapped = new Error(`Failed to listen on ${this.config.admin.host}:${this.config.admin.port}: ${error.message}`);
+        wrapped.code = error.code;
+        wrapped.cause = error;
+        reject(wrapped);
+      };
+
+      this.server.once("error", onError);
       this.server.listen(this.config.admin.port, this.config.admin.host, () => {
-        this.server.off("error", reject);
+        this.server.off("error", onError);
         resolve();
       });
     });
