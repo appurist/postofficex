@@ -1,4 +1,4 @@
-import { readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { copyFile, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { extractAttachmentMetadata } from "./mime.js";
 import { ensureDirectory, ensureParentDirectory, generateMessageId, getHeader, sha256 } from "./util.js";
@@ -19,6 +19,10 @@ function metaDir(rootDir, mailbox) {
   return join(mailboxBase(rootDir, mailbox), "meta");
 }
 
+function incomingDir(rootDir) {
+  return join(rootDir, "incoming");
+}
+
 function messagePath(rootDir, mailbox, id) {
   return join(curDir(rootDir, mailbox), `${id}.eml`);
 }
@@ -34,6 +38,7 @@ export class MailboxStore {
 
   async initialize() {
     await ensureDirectory(this.config.storage.rootDir);
+    await ensureDirectory(incomingDir(this.config.storage.rootDir));
     for (const user of this.config.users) {
       await ensureDirectory(curDir(this.config.storage.rootDir, user.mailbox));
       await ensureDirectory(tmpDir(this.config.storage.rootDir, user.mailbox));
@@ -49,24 +54,10 @@ export class MailboxStore {
     }
   }
 
-  async deliver(mailbox, request) {
-    const rawMessage = request.rawMessage;
-    const size = Buffer.byteLength(rawMessage, "utf8");
-    await ensureDirectory(curDir(this.config.storage.rootDir, mailbox));
-    await ensureDirectory(tmpDir(this.config.storage.rootDir, mailbox));
-    await ensureDirectory(metaDir(this.config.storage.rootDir, mailbox));
-    await this.ensureQuota(mailbox, size);
-
+  buildMetadata(mailbox, rawMessage, size, request) {
     const id = generateMessageId(this.config.server.smtp.hostname);
     const uidl = sha256(`${mailbox}:${id}`);
-    const tempPath = join(tmpDir(this.config.storage.rootDir, mailbox), `${id}.eml.tmp`);
-    const finalMessagePath = messagePath(this.config.storage.rootDir, mailbox, id);
-    const finalMetadataPath = metadataPath(this.config.storage.rootDir, mailbox, id);
-
-    await ensureParentDirectory(tempPath);
-    await writeFile(tempPath, rawMessage, "utf8");
-
-    const metadata = {
+    return {
       id,
       mailbox,
       uidl,
@@ -85,7 +76,46 @@ export class MailboxStore {
         remoteAddress: request.remoteAddress
       }
     };
+  }
 
+  async deliver(mailbox, request) {
+    const rawMessage = request.rawMessage;
+    const size = Buffer.byteLength(rawMessage, "utf8");
+    await ensureDirectory(curDir(this.config.storage.rootDir, mailbox));
+    await ensureDirectory(tmpDir(this.config.storage.rootDir, mailbox));
+    await ensureDirectory(metaDir(this.config.storage.rootDir, mailbox));
+    await this.ensureQuota(mailbox, size);
+
+    const metadata = this.buildMetadata(mailbox, rawMessage, size, request);
+    const { id } = metadata;
+    const tempPath = join(tmpDir(this.config.storage.rootDir, mailbox), `${id}.eml.tmp`);
+    const finalMessagePath = messagePath(this.config.storage.rootDir, mailbox, id);
+    const finalMetadataPath = metadataPath(this.config.storage.rootDir, mailbox, id);
+
+    await ensureParentDirectory(tempPath);
+    await writeFile(tempPath, rawMessage, "utf8");
+
+    await writeFile(finalMetadataPath, JSON.stringify(metadata, null, 2), "utf8");
+    await rename(tempPath, finalMessagePath);
+    return metadata;
+  }
+
+  async deliverFromFile(mailbox, request) {
+    const size = request.size ?? (await Bun.file(request.filePath).size);
+    await ensureDirectory(curDir(this.config.storage.rootDir, mailbox));
+    await ensureDirectory(tmpDir(this.config.storage.rootDir, mailbox));
+    await ensureDirectory(metaDir(this.config.storage.rootDir, mailbox));
+    await this.ensureQuota(mailbox, size);
+
+    const rawMessage = await readFile(request.filePath, "utf8");
+    const metadata = this.buildMetadata(mailbox, rawMessage, size, request);
+    const { id } = metadata;
+    const tempPath = join(tmpDir(this.config.storage.rootDir, mailbox), `${id}.eml.tmp`);
+    const finalMessagePath = messagePath(this.config.storage.rootDir, mailbox, id);
+    const finalMetadataPath = metadataPath(this.config.storage.rootDir, mailbox, id);
+
+    await ensureParentDirectory(tempPath);
+    await copyFile(request.filePath, tempPath);
     await writeFile(finalMetadataPath, JSON.stringify(metadata, null, 2), "utf8");
     await rename(tempPath, finalMessagePath);
     return metadata;
@@ -136,6 +166,11 @@ export class MailboxStore {
   }
 
   async recoverAll() {
+    const incoming = new Bun.Glob("*.tmp");
+    for await (const file of incoming.scan({ cwd: incomingDir(this.config.storage.rootDir), absolute: true })) {
+      await rm(file, { force: true });
+    }
+
     for (const user of this.config.users) {
       await this.recoverMailbox(user.mailbox);
     }

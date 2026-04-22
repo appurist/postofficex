@@ -1,10 +1,56 @@
+import { createReadStream } from "node:fs";
 import dns from "node:dns/promises";
 import net from "node:net";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { StringDecoder } from "node:string_decoder";
 import tls from "node:tls";
 import { ensureTrailingCrlf } from "./util.js";
 
 function dotStuff(rawMessage) {
   return ensureTrailingCrlf(rawMessage).replace(/(^|\r?\n)\./g, "$1..");
+}
+
+class DotStuffTransform extends Transform {
+  constructor() {
+    super();
+    this.decoder = new StringDecoder("utf8");
+    this.atLineStart = true;
+  }
+
+  _transform(chunk, encoding, callback) {
+    try {
+      const text = this.decoder.write(chunk);
+      callback(null, this.dotStuffChunk(text));
+    } catch (error) {
+      callback(error);
+    }
+  }
+
+  _flush(callback) {
+    try {
+      const text = this.decoder.end();
+      callback(null, this.dotStuffChunk(text));
+    } catch (error) {
+      callback(error);
+    }
+  }
+
+  dotStuffChunk(text) {
+    if (!text) {
+      return "";
+    }
+
+    let output = "";
+    for (const char of text) {
+      if (this.atLineStart && char === ".") {
+        output += ".";
+      }
+      output += char;
+      this.atLineStart = char === "\n";
+    }
+    return output;
+  }
 }
 
 class SmtpSocketClient {
@@ -203,6 +249,37 @@ export class OutboundSmtpRelay {
     }
   }
 
+  async deliverFileToTarget(target, mailFrom, recipients, filePath) {
+    let socket = await this.connect(target.exchange, target.port);
+    let client = new SmtpSocketClient(socket);
+
+    try {
+      await this.expectCode(client, [220]);
+      let ehlo = await this.runCommand(client, `EHLO ${this.config.outbound.greetingHostname}`, [250]);
+
+      const supportsStartTls = ehlo.lines.some((line) => /STARTTLS/i.test(line));
+      if (this.config.outbound.preferStartTls && supportsStartTls) {
+        await this.runCommand(client, "STARTTLS", [220]);
+        socket = await this.upgradeToTls(socket, target.exchange);
+        client = new SmtpSocketClient(socket);
+        await this.runCommand(client, `EHLO ${this.config.outbound.greetingHostname}`, [250]);
+      }
+
+      await this.runCommand(client, `MAIL FROM:<${mailFrom}>`, [250]);
+      for (const recipient of recipients) {
+        await this.runCommand(client, `RCPT TO:<${recipient}>`, [250, 251]);
+      }
+
+      await this.runCommand(client, "DATA", [354]);
+      await pipeline(createReadStream(filePath), new DotStuffTransform(), socket, { end: false });
+      client.writeRaw(".\r\n");
+      await this.expectCode(client, [250]);
+      await this.runCommand(client, "QUIT", [221]);
+    } finally {
+      await client.close().catch(() => {});
+    }
+  }
+
   async deliver({ mailFrom, rcptTo, rawMessage }) {
     const grouped = groupRecipientsByDomain(rcptTo);
 
@@ -213,6 +290,41 @@ export class OutboundSmtpRelay {
       for (const target of targets) {
         try {
           await this.deliverToTarget(target, mailFrom, recipients, rawMessage);
+          this.log.info("smtp.outbound_delivered", {
+            domain,
+            targetHost: target.exchange,
+            targetPort: target.port,
+            recipients
+          });
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+          this.log.warn("smtp.outbound_target_failed", {
+            domain,
+            targetHost: target.exchange,
+            targetPort: target.port,
+            error: `${error}`
+          });
+        }
+      }
+
+      if (lastError) {
+        throw lastError;
+      }
+    }
+  }
+
+  async deliverFromFile({ mailFrom, rcptTo, filePath }) {
+    const grouped = groupRecipientsByDomain(rcptTo);
+
+    for (const [domain, recipients] of grouped) {
+      const targets = await this.resolveMxTargets(domain);
+      let lastError = null;
+
+      for (const target of targets) {
+        try {
+          await this.deliverFileToTarget(target, mailFrom, recipients, filePath);
           this.log.info("smtp.outbound_delivered", {
             domain,
             targetHost: target.exchange,

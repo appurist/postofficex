@@ -8,8 +8,13 @@ export function normalizeAddress(value) {
 
 export function stripSmtpPath(value) {
   const trimmed = value.trim();
-  const match = trimmed.match(/^<\s*([^>]+)\s*>$/);
-  return normalizeAddress(match ? match[1] : trimmed);
+  const bracketed = trimmed.match(/^<\s*([^>]+)\s*>(?:\s+.*)?$/);
+  if (bracketed) {
+    return normalizeAddress(bracketed[1]);
+  }
+
+  const [path] = trimmed.split(/\s+/, 1);
+  return normalizeAddress(path ?? trimmed);
 }
 
 export function ensureTrailingCrlf(raw) {
@@ -85,4 +90,49 @@ export async function ensureParentDirectory(path) {
 
 export function resolveFrom(baseDir, candidate) {
   return resolve(baseDir, candidate);
+}
+
+export async function writeToStream(stream, chunk) {
+  if (stream.write(chunk)) {
+    return;
+  }
+
+  await new Promise((resolve, reject) => {
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      stream.off("drain", onDrain);
+      stream.off("error", onError);
+    };
+
+    stream.once("drain", onDrain);
+    stream.once("error", onError);
+  });
+}
+
+export async function endStream(stream) {
+  await new Promise((resolve, reject) => {
+    const onFinish = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      stream.off("finish", onFinish);
+      stream.off("error", onError);
+    };
+
+    stream.once("finish", onFinish);
+    stream.once("error", onError);
+    stream.end();
+  });
 }

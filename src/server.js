@@ -1,12 +1,14 @@
-import { readFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import tls from "node:tls";
+import { join } from "node:path";
 import { AdminUiServer } from "./admin.js";
 import { verifyPassword } from "./auth.js";
 import { buildUserDirectory } from "./config.js";
 import { logger } from "./logger.js";
 import { OutboundSmtpRelay } from "./outbound.js";
-import { ensureTrailingCrlf, stripSmtpPath } from "./util.js";
+import { endStream, ensureDirectory, ensureTrailingCrlf, generateMessageId, stripSmtpPath, writeToStream } from "./util.js";
 
 function decodeBase64Utf8(value) {
   try {
@@ -29,6 +31,37 @@ function normalizeLoginIdentifier(value) {
   }
 
   return normalized;
+}
+
+function canWriteToSocket(socket) {
+  return Boolean(socket && typeof socket.write === "function" && !socket.destroyed && socket.writable);
+}
+
+function safeSocketWrite(socket, message) {
+  if (!canWriteToSocket(socket)) {
+    return false;
+  }
+
+  try {
+    socket.write(message);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function safeSocketEnd(socket) {
+  if (!socket || typeof socket.end !== "function") {
+    return;
+  }
+
+  try {
+    socket.end();
+  } catch {
+    try {
+      socket.destroy();
+    } catch {}
+  }
 }
 
 export class PostOfficeServer {
@@ -271,17 +304,21 @@ export class PostOfficeServer {
       throw new Error("TLS material not loaded");
     }
 
-    return new tls.TLSSocket(socket, {
-      isServer: true,
+    const secureContext = tls.createSecureContext({
       cert: this.tlsMaterial.cert,
       key: this.tlsMaterial.key
+    });
+
+    return new tls.TLSSocket(socket, {
+      isServer: true,
+      secureContext
     });
   }
 
   attachCommonSocketState(socket) {
     socket.setTimeout(this.config.limits.socketTimeoutMs, () => {
-      socket.write("-ERR inactivity timeout\r\n");
-      socket.end();
+      safeSocketWrite(socket, "-ERR inactivity timeout\r\n");
+      safeSocketEnd(socket);
     });
   }
 
@@ -306,7 +343,12 @@ export class PostOfficeServer {
       return false;
     }
 
-    return user.addresses.includes(address);
+    if (user.addresses.includes(address)) {
+      return true;
+    }
+
+    const [localPart, domain] = address.split("@");
+    return Boolean(localPart && domain && localPart === user.username && this.config.domains.includes(domain));
   }
 
   async rejectInvalidSubmissionAuth(state, write, socket) {
@@ -317,7 +359,7 @@ export class PostOfficeServer {
     if (state.authFailures >= this.config.limits.maxInvalidAuthAttempts) {
       write("535 5.7.8 too many authentication failures\r\n");
       state.closed = true;
-      socket.end();
+      safeSocketEnd(socket);
       return;
     }
 
@@ -447,20 +489,26 @@ export class PostOfficeServer {
       mailFrom: null,
       rcptTo: [],
       dataMode: false,
-      dataLines: [],
+      dataTempPath: null,
+      dataWriter: null,
+      dataBytes: 0,
       closed: false
     };
+    const remoteAddress = socket.remoteAddress ?? null;
+    const remotePort = socket.remotePort ?? null;
 
     const resetMessage = () => {
       state.mailFrom = null;
       state.rcptTo = [];
       state.dataMode = false;
-      state.dataLines = [];
+      state.dataTempPath = null;
+      state.dataWriter = null;
+      state.dataBytes = 0;
     };
 
     const write = (message) => {
       if (!state.closed) {
-        socket.write(message);
+        safeSocketWrite(socket, message);
       }
     };
 
@@ -473,29 +521,46 @@ export class PostOfficeServer {
     const processLine = async (line) => {
       if (state.dataMode) {
         if (line === ".") {
-          const rawMessage = ensureTrailingCrlf(state.dataLines.join("\r\n"));
+          const filePath = state.dataTempPath;
+          const writer = state.dataWriter;
           state.dataMode = false;
-          state.dataLines = [];
+          state.dataTempPath = null;
+          state.dataWriter = null;
 
           try {
-            await this.acceptSmtpMessage(state, rawMessage, socket);
+            await endStream(writer);
+            await this.acceptSmtpMessage(state, {
+              filePath,
+              size: state.dataBytes
+            }, socket);
             write("250 2.0.0 message accepted\r\n");
           } catch (error) {
             this.log.error("smtp.delivery_failed", { error: `${error}` });
             write(`552 5.3.4 ${String(error instanceof Error ? error.message : error)}\r\n`);
           } finally {
+            if (filePath) {
+              await rm(filePath, { force: true }).catch(() => {});
+            }
             resetMessage();
           }
           return;
         }
 
         const unescaped = line.startsWith("..") ? line.slice(1) : line;
-        state.dataLines.push(unescaped);
-        const bytes = Buffer.byteLength(state.dataLines.join("\r\n"), "utf8");
-        if (bytes > this.config.limits.maxMessageBytes) {
+        state.dataBytes += Buffer.byteLength(unescaped, "utf8") + 2;
+        if (state.dataBytes > this.config.limits.maxMessageBytes) {
+          if (state.dataWriter) {
+            await endStream(state.dataWriter).catch(() => {});
+          }
+          if (state.dataTempPath) {
+            await rm(state.dataTempPath, { force: true }).catch(() => {});
+          }
           resetMessage();
           write("552 5.3.4 message too large\r\n");
+          return;
         }
+
+        await writeToStream(state.dataWriter, `${unescaped}\r\n`);
         return;
       }
 
@@ -508,6 +573,19 @@ export class PostOfficeServer {
       const command = (verb ?? "").toUpperCase();
       const argument = rest.join(" ").trim();
       const smtpSettings = this.getSmtpSettings(state.mode);
+
+      if (["EHLO", "HELO", "MAIL", "RCPT", "DATA", "QUIT", "RSET", "STARTTLS"].includes(command)) {
+        this.log.info("smtp.command", {
+          mode: state.mode,
+          secure: state.secure,
+          remoteAddress,
+          remotePort,
+          command,
+          argument: command === "DATA" ? null : argument || null,
+          mailFrom: state.mailFrom,
+          rcptCount: state.rcptTo.length
+        });
+      }
 
       switch (command) {
         case "EHLO":
@@ -567,6 +645,11 @@ export class PostOfficeServer {
           resetMessage();
           state.mailFrom = stripSmtpPath(argument.slice(5).trim());
           if (state.mode === "submission" && !this.submissionSenderAllowed(state.authenticatedUser, state.mailFrom)) {
+            this.log.warn("smtp.submission_sender_rejected", {
+              attemptedSender: state.mailFrom,
+              username: state.authenticatedUser?.username ?? null,
+              allowedAddresses: state.authenticatedUser?.addresses ?? []
+            });
             write("553 5.7.1 sender address not owned by authenticated user\r\n");
             state.mailFrom = null;
             return;
@@ -607,8 +690,15 @@ export class PostOfficeServer {
             write("503 5.5.1 need RCPT TO first\r\n");
             return;
           }
+          await ensureDirectory(join(this.config.storage.rootDir, "incoming"));
+          state.dataTempPath = join(
+            this.config.storage.rootDir,
+            "incoming",
+            `${generateMessageId(this.config.server.smtp.hostname)}.smtp.tmp`
+          );
+          state.dataWriter = createWriteStream(state.dataTempPath, { encoding: "utf8" });
           state.dataMode = true;
-          state.dataLines = [];
+          state.dataBytes = 0;
           write("354 End data with <CR><LF>.<CR><LF>\r\n");
           return;
         case "RSET":
@@ -623,7 +713,7 @@ export class PostOfficeServer {
         case "QUIT":
           write("221 2.0.0 bye\r\n");
           state.closed = true;
-          socket.end();
+          safeSocketEnd(socket);
           return;
         default:
           write("502 5.5.2 command not implemented\r\n");
@@ -631,28 +721,64 @@ export class PostOfficeServer {
     };
 
     this.attachCommonSocketState(socket);
+    this.log.info("smtp.connection_opened", {
+      mode: state.mode,
+      secure: state.secure,
+      remoteAddress,
+      remotePort
+    });
     if (sendGreeting) {
       write(`220 ${this.config.server.smtp.hostname} ESMTP PostOfficeX\r\n`);
     }
 
     let buffer = "";
+    let readLoop = Promise.resolve();
     socket.on("data", (chunk) => {
       buffer += chunk.toString("utf8");
-      void this.consumeLines(buffer, async (line, remaining) => {
-        buffer = remaining;
-        await processLine(line);
-      });
+      readLoop = readLoop
+        .then(async () => {
+          await this.consumeLines(() => buffer, async (line, remaining) => {
+            buffer = remaining;
+            await processLine(line);
+          });
+        })
+        .catch((error) => {
+          this.log.error("smtp.read_failed", {
+            mode: state.mode,
+            secure: state.secure,
+            remoteAddress,
+            remotePort,
+            error: `${error}`
+          });
+          if (!state.closed) {
+            safeSocketEnd(socket);
+          }
+        });
     });
 
     socket.on("error", (error) => {
-      this.log.warn("smtp.socket_error", { error: `${error}` });
+      this.log.warn("smtp.socket_error", {
+        mode: state.mode,
+        secure: state.secure,
+        remoteAddress,
+        remotePort,
+        error: `${error}`
+      });
     });
     socket.on("close", () => {
       state.closed = true;
+      this.log.info("smtp.connection_closed", {
+        mode: state.mode,
+        secure: state.secure,
+        remoteAddress,
+        remotePort,
+        mailFrom: state.mailFrom,
+        rcptCount: state.rcptTo.length
+      });
     });
   }
 
-  async storeLocalMessage(recipients, state, rawMessage, socket, event) {
+  async storeLocalMessage(recipients, state, messageSource, socket, event) {
     const delivered = new Set();
 
     for (const address of recipients) {
@@ -662,10 +788,23 @@ export class PostOfficeServer {
       }
 
       delivered.add(user.mailbox);
-      await this.store.deliver(user.mailbox, {
+      const metadata = await this.store.deliverFromFile(user.mailbox, {
+        filePath: messageSource.filePath,
+        size: messageSource.size,
         mailFrom: state.mailFrom,
         rcptTo: recipients,
-        rawMessage,
+        remoteAddress: socket.remoteAddress ?? null
+      });
+
+      this.log.info("mailbox.message_stored", {
+        mailbox: user.mailbox,
+        messageId: metadata.id,
+        subject: metadata.subject,
+        headerFrom: metadata.from,
+        envelopeFrom: state.mailFrom,
+        recipients: metadata.envelope.rcptTo,
+        size: metadata.size,
+        secure: state.secure,
         remoteAddress: socket.remoteAddress ?? null
       });
     }
@@ -678,21 +817,27 @@ export class PostOfficeServer {
     });
   }
 
-  async acceptSmtpMessage(state, rawMessage, socket) {
+  async acceptSmtpMessage(state, messageSource, socket) {
     if (state.mode === "submission") {
-      if (state.rcptTo.every((address) => this.isLocalRecipient(address))) {
-        await this.storeLocalMessage(state.rcptTo, state, rawMessage, socket, "smtp.submission_stored");
+      const localRecipients = state.rcptTo.filter((address) => this.isLocalRecipient(address));
+      const remoteRecipients = state.rcptTo.filter((address) => !this.isLocalRecipient(address));
+
+      if (localRecipients.length > 0) {
+        await this.storeLocalMessage(localRecipients, state, messageSource, socket, "smtp.submission_stored");
+      }
+
+      if (remoteRecipients.length === 0) {
         return;
       }
 
-      await this.outboundRelay.deliver({
+      await this.outboundRelay.deliverFromFile({
         mailFrom: state.mailFrom,
-        rcptTo: state.rcptTo,
-        rawMessage
+        rcptTo: remoteRecipients,
+        filePath: messageSource.filePath
       });
 
       this.log.info("smtp.submission_sent", {
-        recipients: state.rcptTo,
+        recipients: remoteRecipients,
         secure: state.secure,
         remoteAddress: socket.remoteAddress ?? null,
         username: state.authenticatedUser?.username ?? null
@@ -700,7 +845,7 @@ export class PostOfficeServer {
       return;
     }
 
-    await this.storeLocalMessage(state.rcptTo, state, rawMessage, socket, "smtp.message_stored");
+    await this.storeLocalMessage(state.rcptTo, state, messageSource, socket, "smtp.message_stored");
   }
 
   handlePop3(rawSocket, secure, implicitTls, sendGreeting = true) {
@@ -715,7 +860,7 @@ export class PostOfficeServer {
     };
 
     const write = (message) => {
-      socket.write(message);
+      safeSocketWrite(socket, message);
     };
 
     const resetListenersForTls = () => {
@@ -767,7 +912,7 @@ export class PostOfficeServer {
                 state.authFailures += 1;
                 if (state.authFailures >= this.config.limits.maxInvalidAuthAttempts) {
                   write("-ERR too many auth failures\r\n");
-                  socket.end();
+                  safeSocketEnd(socket);
                   return;
                 }
                 write("-ERR invalid credentials\r\n");
@@ -782,7 +927,7 @@ export class PostOfficeServer {
             return;
           case "QUIT":
             write("+OK bye\r\n");
-            socket.end();
+            safeSocketEnd(socket);
             return;
           default:
             write("-ERR authenticate first\r\n");
@@ -876,7 +1021,7 @@ export class PostOfficeServer {
             await this.store.deleteMessage(mailbox, id);
           }
           write("+OK bye\r\n");
-          socket.end();
+          safeSocketEnd(socket);
           return;
         default:
           write("-ERR command not supported\r\n");
@@ -889,28 +1034,35 @@ export class PostOfficeServer {
     }
 
     let buffer = "";
+    let readLoop = Promise.resolve();
     socket.on("data", (chunk) => {
       buffer += chunk.toString("utf8");
-      void this.consumeLines(buffer, async (line, remaining) => {
-        buffer = remaining;
-        await processCommand(line);
-      });
+      readLoop = readLoop
+        .then(async () => {
+          await this.consumeLines(() => buffer, async (line, remaining) => {
+            buffer = remaining;
+            await processCommand(line);
+          });
+        })
+        .catch((error) => {
+          this.log.error("pop3.read_failed", { error: `${error}` });
+          safeSocketEnd(socket);
+        });
     });
     socket.on("error", (error) => {
       this.log.warn("pop3.socket_error", { error: `${error}` });
     });
   }
 
-  async consumeLines(source, handler) {
-    let buffer = source;
+  async consumeLines(readBuffer, handler) {
     while (true) {
+      const buffer = await readBuffer();
       const idx = buffer.indexOf("\n");
       if (idx === -1) {
         break;
       }
       const line = buffer.slice(0, idx).replace(/\r$/, "");
-      buffer = buffer.slice(idx + 1);
-      await handler(line, buffer);
+      await handler(line, buffer.slice(idx + 1));
     }
   }
 }

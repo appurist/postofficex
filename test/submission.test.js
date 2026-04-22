@@ -286,4 +286,113 @@ describe("smtp submission", () => {
     expect(await smtpCommand(smtpB, "MAIL FROM:<alice@example.test>\r\n")).toContain("250");
     expect(await smtpCommand(smtpB, "QUIT\r\n")).toContain("221");
   });
+
+  test("accepts MAIL FROM with ESMTP SIZE parameter", async () => {
+    active = await setupSubmissionServer();
+
+    const smtp = await connect(active.submissionPort);
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    await smtpCommand(smtp, "EHLO localhost\r\n");
+    const auth = Buffer.from("\u0000alice@example.test\u0000secret123").toString("base64");
+    expect(await smtpCommand(smtp, `AUTH PLAIN ${auth}\r\n`)).toContain("235 2.7.0");
+    expect(await smtpCommand(smtp, "MAIL FROM:<alice@example.test> SIZE=1701\r\n")).toContain("250");
+    expect(await smtpCommand(smtp, "QUIT\r\n")).toContain("221");
+  });
+
+  test("stores local recipients while also relaying external recipients", async () => {
+    remoteServer = createRemoteSmtpServer();
+    const remotePort = await reservePort();
+    await new Promise((resolve, reject) => {
+      remoteServer.server.once("error", reject);
+      remoteServer.server.listen(remotePort, "127.0.0.1", resolve);
+    });
+
+    active = await setupSubmissionServer({
+      resolveMx: async (domain) => [{ exchange: "127.0.0.1", port: remotePort, priority: 0 }]
+    });
+
+    const smtp = await connect(active.submissionPort);
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    await smtpCommand(smtp, "EHLO localhost\r\n");
+    const auth = Buffer.from("\u0000alice@example.test\u0000secret123").toString("base64");
+    expect(await smtpCommand(smtp, `AUTH PLAIN ${auth}\r\n`)).toContain("235 2.7.0");
+    expect(await smtpCommand(smtp, "MAIL FROM:<alice@example.test>\r\n")).toContain("250");
+    expect(await smtpCommand(smtp, "RCPT TO:<alice@example.test>\r\n")).toContain("250");
+    expect(await smtpCommand(smtp, "RCPT TO:<bob@remote.test>\r\n")).toContain("250");
+    expect(await smtpCommand(smtp, "DATA\r\n")).toContain("354");
+    expect(
+      await smtpCommand(
+        smtp,
+        "From: alice@example.test\r\nTo: alice@example.test, bob@remote.test\r\nSubject: mixed submit\r\n\r\nmixed body\r\n.\r\n"
+      )
+    ).toContain("250");
+    expect(await smtpCommand(smtp, "QUIT\r\n")).toContain("221");
+
+    const pop3 = await connect(active.pop3Port);
+    await readUntil(pop3, (text) => text.endsWith("\r\n"));
+    expect(await pop3Command(pop3, "USER alice\r\n")).toContain("+OK");
+    expect(await pop3Command(pop3, "PASS secret123\r\n")).toContain("+OK");
+    const message = await pop3Command(pop3, "RETR 1\r\n", true);
+    expect(message).toContain("Subject: mixed submit");
+    expect(message).toContain("mixed body");
+    expect(await pop3Command(pop3, "QUIT\r\n")).toContain("+OK");
+
+    expect(remoteServer.deliveries).toHaveLength(1);
+    expect(remoteServer.deliveries[0].recipients).toEqual(["<bob@remote.test>"]);
+    expect(remoteServer.deliveries[0].rawMessage).toContain("Subject: mixed submit");
+  });
+
+  test("handles chunked large mixed-recipient submissions without overlapping socket reads", async () => {
+    remoteServer = createRemoteSmtpServer();
+    const remotePort = await reservePort();
+    await new Promise((resolve, reject) => {
+      remoteServer.server.once("error", reject);
+      remoteServer.server.listen(remotePort, "127.0.0.1", resolve);
+    });
+
+    active = await setupSubmissionServer({
+      resolveMx: async () => [{ exchange: "127.0.0.1", port: remotePort, priority: 0 }]
+    });
+
+    const smtp = await connect(active.submissionPort);
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    await smtpCommand(smtp, "EHLO localhost\r\n");
+    const auth = Buffer.from("\u0000alice@example.test\u0000secret123").toString("base64");
+    expect(await smtpCommand(smtp, `AUTH PLAIN ${auth}\r\n`)).toContain("235 2.7.0");
+    expect(await smtpCommand(smtp, "MAIL FROM:<alice@example.test>\r\n")).toContain("250");
+    expect(await smtpCommand(smtp, "RCPT TO:<alice@example.test>\r\n")).toContain("250");
+    expect(await smtpCommand(smtp, "RCPT TO:<bob@remote.test>\r\n")).toContain("250");
+    expect(await smtpCommand(smtp, "DATA\r\n")).toContain("354");
+
+    const body = [
+      "From: alice@example.test\r\n",
+      "To: alice@example.test, bob@remote.test\r\n",
+      "Subject: chunked large mixed submit\r\n",
+      "\r\n",
+      ...Array.from({ length: 2048 }, (_, index) => `line ${index} ${"x".repeat(180)}\r\n`),
+      ".\r\n"
+    ].join("");
+
+    for (let index = 0; index < body.length; index += 257) {
+      smtp.write(body.slice(index, index + 257));
+      await Bun.sleep(0);
+    }
+
+    const dataResult = await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    expect(dataResult).toContain("250");
+    expect(await smtpCommand(smtp, "QUIT\r\n")).toContain("221");
+
+    const pop3 = await connect(active.pop3Port);
+    await readUntil(pop3, (text) => text.endsWith("\r\n"));
+    expect(await pop3Command(pop3, "USER alice\r\n")).toContain("+OK");
+    expect(await pop3Command(pop3, "PASS secret123\r\n")).toContain("+OK");
+    const message = await pop3Command(pop3, "RETR 1\r\n", true);
+    expect(message).toContain("Subject: chunked large mixed submit");
+    expect(message).toContain("line 2047");
+    expect(await pop3Command(pop3, "QUIT\r\n")).toContain("+OK");
+
+    expect(remoteServer.deliveries).toHaveLength(1);
+    expect(remoteServer.deliveries[0].rawMessage).toContain("Subject: chunked large mixed submit");
+    expect(remoteServer.deliveries[0].rawMessage).toContain("line 2047");
+  });
 });

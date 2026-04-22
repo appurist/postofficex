@@ -60,6 +60,23 @@ function adminCookieAttributes(adminConfig) {
   return `Path=/; HttpOnly; SameSite=Lax${adminConfig?.enableTls ? "; Secure" : ""}`;
 }
 
+function isAdminPublicRoute(pathname, method) {
+  return (
+    (pathname === "/ping" && method === "GET") ||
+    (pathname === "/login" && (method === "GET" || method === "POST"))
+  );
+}
+
+function isAdminAuthenticatedRoute(pathname, method) {
+  return (
+    (pathname === "/" && method === "GET") ||
+    (pathname === "/logout" && method === "POST") ||
+    (pathname === "/config/global" && method === "POST") ||
+    (pathname === "/users/save" && method === "POST") ||
+    (pathname === "/users/delete" && method === "POST")
+  );
+}
+
 export async function verifyAdminPassword(input, adminConfig) {
   if (adminConfig?.password) {
     return input === adminConfig.password;
@@ -483,7 +500,7 @@ export class AdminUiServer {
     response.end(body);
 
     const path = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`).pathname;
-    if (this.config.admin?.logRequests && path !== "/ping") {
+    if (this.config.admin?.logRequests && path !== "/ping" && statusCode !== 404) {
       this.log.info("admin.request", {
         method: request.method ?? "GET",
         path,
@@ -505,6 +522,13 @@ export class AdminUiServer {
     const method = request.method ?? "GET";
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
     const flash = this.consumeFlash(request, response);
+    const isPublicRoute = isAdminPublicRoute(url.pathname, method);
+    const isAuthenticatedRoute = isAdminAuthenticatedRoute(url.pathname, method);
+
+    if (!isPublicRoute && !isAuthenticatedRoute) {
+      this.sendResponse(request, response, 404, { "Content-Type": "text/plain; charset=utf-8" }, "Not found");
+      return;
+    }
 
     if (url.pathname === "/ping" && method === "GET") {
       this.sendResponse(

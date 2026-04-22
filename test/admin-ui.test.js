@@ -181,6 +181,26 @@ describe("admin ui", () => {
     expect(logEntries.some((entry) => entry.event === "admin.request" && entry.fields.path === "/ping")).toBe(false);
   });
 
+  test("returns 404 for unknown unauthenticated paths and does not log them", async () => {
+    const logEntries = [];
+    const log = {
+      info(event, fields) {
+        logEntries.push({ level: "info", event, fields });
+      },
+      warn() {},
+      error() {}
+    };
+
+    activeServer = await setupAdminServer({ adminLogRequests: true, log });
+
+    const response = await fetch(`http://127.0.0.1:${activeServer.adminPort}/.env`, {
+      redirect: "manual"
+    });
+
+    expect(response.status).toBe(404);
+    expect(logEntries.some((entry) => entry.event === "admin.request" && entry.fields.path === "/.env")).toBe(false);
+  });
+
   test("requires login and renders dashboard after authentication", async () => {
     activeServer = await setupAdminServer();
 
