@@ -270,6 +270,7 @@ function renderAdminPage(config, flash = "") {
               <input name="adminPort" type="number" value="${escapeHtml(config.admin?.port ?? 80)}" required>
             </div>
           </div>
+          <div class="inline"><input name="adminLogRequests" type="checkbox" ${config.admin?.logRequests ? "checked" : ""}><span>Log all admin route requests and response codes</span></div>
           <label>New admin password</label>
           <input name="adminPassword" type="password" placeholder="Leave blank to keep the current admin password">
           <div class="actions">
@@ -409,6 +410,20 @@ export class AdminUiServer {
     response.setHeader("Set-Cookie", `postofficex_flash=${encodeURIComponent(message)}; Path=/; HttpOnly; SameSite=Lax`);
   }
 
+  sendResponse(request, response, statusCode, headers, body = "") {
+    response.writeHead(statusCode, headers);
+    response.end(body);
+
+    const path = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`).pathname;
+    if (this.config.admin?.logRequests && path !== "/ping") {
+      this.log.info("admin.request", {
+        method: request.method ?? "GET",
+        path,
+        statusCode
+      });
+    }
+  }
+
   consumeFlash(request, response) {
     const cookies = parseCookie(request.headers.cookie);
     const flash = cookies.postofficex_flash ? decodeURIComponent(cookies.postofficex_flash) : "";
@@ -424,14 +439,24 @@ export class AdminUiServer {
     const flash = this.consumeFlash(request, response);
 
     if (url.pathname === "/ping" && method === "GET") {
-      response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-      response.end(JSON.stringify({ status: "OK", name: "postofficex" }));
+      this.sendResponse(
+        request,
+        response,
+        200,
+        { "Content-Type": "application/json; charset=utf-8" },
+        JSON.stringify({ status: "OK", name: "postofficex" })
+      );
       return;
     }
 
     if (url.pathname === "/login" && method === "GET") {
-      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      response.end(renderLoginPage(flash));
+      this.sendResponse(
+        request,
+        response,
+        200,
+        { "Content-Type": "text/html; charset=utf-8" },
+        renderLoginPage(flash)
+      );
       return;
     }
 
@@ -440,8 +465,13 @@ export class AdminUiServer {
       const password = form.get("password") ?? "";
       const valid = await verifyAdminPassword(password, this.config.admin);
       if (!valid) {
-        response.writeHead(401, { "Content-Type": "text/html; charset=utf-8" });
-        response.end(renderLoginPage("Invalid admin password."));
+        this.sendResponse(
+          request,
+          response,
+          401,
+          { "Content-Type": "text/html; charset=utf-8" },
+          renderLoginPage("Invalid admin password.")
+        );
         return;
       }
 
@@ -451,22 +481,26 @@ export class AdminUiServer {
       this.sessions.set(token, {
         fingerprint: authFingerprint(this.config.admin)
       });
-      response.writeHead(302, {
+      this.sendResponse(request, response, 302, {
         Location: "/",
         "Set-Cookie": `postofficex_admin=${token}; Path=/; HttpOnly; SameSite=Lax`
       });
-      response.end();
       return;
     }
 
     if (!this.isAuthenticated(request)) {
-      redirect(response, "/login");
+      this.sendResponse(request, response, 302, { Location: "/login" });
       return;
     }
 
     if (url.pathname === "/" && method === "GET") {
-      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      response.end(renderAdminPage(this.config, flash));
+      this.sendResponse(
+        request,
+        response,
+        200,
+        { "Content-Type": "text/html; charset=utf-8" },
+        renderAdminPage(this.config, flash)
+      );
       return;
     }
 
@@ -475,11 +509,10 @@ export class AdminUiServer {
       if (cookies.postofficex_admin) {
         this.sessions.delete(cookies.postofficex_admin);
       }
-      response.writeHead(302, {
+      this.sendResponse(request, response, 302, {
         Location: "/login",
         "Set-Cookie": "postofficex_admin=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
       });
-      response.end();
       return;
     }
 
@@ -521,6 +554,7 @@ export class AdminUiServer {
         admin: {
           host: form.get("adminHost")?.trim() || this.config.admin.host,
           port: numberFromForm(form, "adminPort", this.config.admin.port),
+          logRequests: boolFromForm(form, "adminLogRequests"),
           password: this.config.admin.password,
           passwordHash: this.config.admin.passwordHash
         }
@@ -606,7 +640,6 @@ export class AdminUiServer {
       return;
     }
 
-    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-    response.end("Not found");
+    this.sendResponse(request, response, 404, { "Content-Type": "text/plain; charset=utf-8" }, "Not found");
   }
 }

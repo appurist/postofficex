@@ -22,6 +22,7 @@ export async function loadConfig(configPath) {
     admin: {
       host: parsed.admin?.host ?? "0.0.0.0",
       port: parsed.admin?.port ?? 80,
+      logRequests: parsed.admin?.logRequests ?? false,
       password: parsed.admin?.password ?? "",
       passwordHash: parsed.admin?.passwordHash ?? ""
     },
@@ -74,6 +75,7 @@ export function serializeConfig(config) {
     admin: {
       host: config.admin?.host ?? "0.0.0.0",
       port: config.admin?.port ?? 80,
+      logRequests: config.admin?.logRequests ?? false,
       password: config.admin?.password ?? "",
       passwordHash: config.admin?.passwordHash ?? ""
     },

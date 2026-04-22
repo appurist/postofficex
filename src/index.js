@@ -41,10 +41,8 @@ async function main() {
 
 if (import.meta.main) {
   void main().catch((error) => {
-    logger.error("server.crash", {
-      configPath,
-      error: formatStartupError(error, configPath)
-    });
+    logger.error("server.crash", { configPath });
+    console.log(formatStartupError(error, configPath));
     process.exit(1);
   });
 }

@@ -21,7 +21,7 @@ async function reservePort() {
   });
 }
 
-async function setupAdminServer({ plaintextAdminPassword = false } = {}) {
+async function setupAdminServer({ plaintextAdminPassword = false, adminLogRequests = false, log = undefined } = {}) {
   const rootDir = await mkdtemp(join(tmpdir(), "postofficex-admin-"));
   const userPasswordHash = await Bun.password.hash("secret123");
   const adminPasswordHash = plaintextAdminPassword ? "" : await Bun.password.hash("adminpw");
@@ -63,6 +63,7 @@ async function setupAdminServer({ plaintextAdminPassword = false } = {}) {
     admin: {
       host: "127.0.0.1",
       port: adminPort,
+      logRequests: adminLogRequests,
       password: plaintextAdminPassword ? "adminpw" : "",
       passwordHash: adminPasswordHash
     },
@@ -80,7 +81,7 @@ async function setupAdminServer({ plaintextAdminPassword = false } = {}) {
   const configPath = join(rootDir, "config.json");
   await writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
   const resolved = await loadConfig(configPath);
-  const server = new PostOfficeServer(resolved, new MailboxStore(resolved));
+  const server = new PostOfficeServer(resolved, new MailboxStore(resolved), log);
   await server.start();
   return { server, rootDir, configPath, adminPort };
 }
@@ -101,6 +102,34 @@ describe("admin ui", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/json");
     expect(await response.json()).toEqual({ status: "OK", name: "postofficex" });
+  });
+
+  test("logs admin requests when request logging is enabled but skips /ping", async () => {
+    const logEntries = [];
+    const log = {
+      info(event, fields) {
+        logEntries.push({ level: "info", event, fields });
+      },
+      warn() {},
+      error() {}
+    };
+
+    activeServer = await setupAdminServer({ adminLogRequests: true, log });
+
+    const ping = await fetch(`http://127.0.0.1:${activeServer.adminPort}/ping`);
+    expect(ping.status).toBe(200);
+
+    const loginPage = await fetch(`http://127.0.0.1:${activeServer.adminPort}/login`);
+    expect(loginPage.status).toBe(200);
+
+    const requestLog = logEntries.find((entry) => entry.event === "admin.request");
+    expect(requestLog).toBeTruthy();
+    expect(requestLog.fields).toEqual({
+      method: "GET",
+      path: "/login",
+      statusCode: 200
+    });
+    expect(logEntries.some((entry) => entry.event === "admin.request" && entry.fields.path === "/ping")).toBe(false);
   });
 
   test("requires login and renders dashboard after authentication", async () => {
@@ -173,7 +202,8 @@ describe("admin ui", () => {
         storageRootDir: "./data",
         domains: "example.test\nexample.net",
         adminHost: "127.0.0.1",
-        adminPort: String(activeServer.adminPort)
+        adminPort: String(activeServer.adminPort),
+        adminLogRequests: "on"
       }).toString()
     });
 
@@ -195,6 +225,7 @@ describe("admin ui", () => {
     const saved = JSON.parse(await readFile(activeServer.configPath, "utf8"));
     expect(saved.server.smtp.hostname).toBe("mail.changed.test");
     expect(saved.domains).toEqual(["example.test", "example.net"]);
+    expect(saved.admin.logRequests).toBe(true);
     expect(saved.users.some((user) => user.username === "bob")).toBe(true);
     expect(saved.users.find((user) => user.username === "bob").addresses).toEqual([
       "bob@example.test",

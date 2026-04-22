@@ -88,9 +88,17 @@ export class PostOfficeServer {
 
   async listen(server, port, host) {
     await new Promise((resolve, reject) => {
-      server.once("error", reject);
+      const onError = (error) => {
+        server.off("error", onError);
+        const wrapped = new Error(`Failed to listen on ${host}:${port}: ${error.message}`);
+        wrapped.code = error.code;
+        wrapped.cause = error;
+        reject(wrapped);
+      };
+
+      server.once("error", onError);
       server.listen(port, host, () => {
-        server.off("error", reject);
+        server.off("error", onError);
         resolve();
       });
     });

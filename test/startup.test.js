@@ -22,4 +22,13 @@ describe("startup errors", () => {
     expect(message).toContain("is not valid JSON");
     expect(message).toContain("/srv/postofficex/config.json");
   });
+
+  test("preserves explicit listen failure context", () => {
+    const error = new Error("Failed to listen on mail.postofficex.com:80: EADDRINUSE");
+
+    const message = formatStartupError(error, "/srv/postofficex/config.json");
+
+    expect(message).toContain("mail.postofficex.com:80");
+    expect(message).toContain("EADDRINUSE");
+  });
 });
