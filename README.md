@@ -26,6 +26,7 @@ bun -e "console.log(await Bun.password.hash('change-me'))"
 
 3. Put the hash into `config.json`.
 4. Update domains, users, ports, and TLS paths as needed.
+   The example config does not create any mail users by default, so define at least one user before testing SMTP or POP3.
    To enable the admin UI, set `admin.password` or `admin.passwordHash` in `config.json`.
 5. Start the server:
 

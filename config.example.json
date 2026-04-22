@@ -40,15 +40,5 @@
   "domains": [
     "example.test"
   ],
-  "users": [
-    {
-      "username": "alice",
-      "mailbox": "alice",
-      "passwordHash": "$argon2id$v=19$m=65536,t=2,p=1$replace$me",
-      "addresses": [
-        "alice@example.test",
-        "support@example.test"
-      ]
-    }
-  ]
+  "users": []
 }
