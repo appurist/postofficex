@@ -35,6 +35,14 @@ export class PostOfficeServer {
     this.adminServer = undefined;
     this.tlsMaterial = undefined;
     this.outboundRelay = deps.outboundRelay ?? new OutboundSmtpRelay(config, log, deps.outbound);
+    this.socketGroups = {
+      smtp: new Set(),
+      submission: new Set(),
+      submissionTls: new Set(),
+      pop3: new Set(),
+      pop3Tls: new Set()
+    };
+    this.stopping = false;
   }
 
   async start() {
@@ -54,9 +62,18 @@ export class PostOfficeServer {
       };
     }
 
-    this.smtpServer = net.createServer((socket) => this.handleSmtp(socket, { mode: "inbound", secure: false }));
-    this.submissionServer = net.createServer((socket) => this.handleSmtp(socket, { mode: "submission", secure: false }));
-    this.pop3Server = net.createServer((socket) => this.handlePop3(socket, false, false));
+    this.smtpServer = net.createServer((socket) => {
+      this.trackSocket(this.socketGroups.smtp, socket);
+      this.handleSmtp(socket, { mode: "inbound", secure: false });
+    });
+    this.submissionServer = net.createServer((socket) => {
+      this.trackSocket(this.socketGroups.submission, socket);
+      this.handleSmtp(socket, { mode: "submission", secure: false });
+    });
+    this.pop3Server = net.createServer((socket) => {
+      this.trackSocket(this.socketGroups.pop3, socket);
+      this.handlePop3(socket, false, false);
+    });
 
     await Promise.all([
       this.listen(this.smtpServer, this.config.server.smtp.port, this.config.server.smtp.host),
@@ -74,7 +91,10 @@ export class PostOfficeServer {
           cert: this.tlsMaterial.cert,
           key: this.tlsMaterial.key
         },
-        (socket) => this.handleSmtp(socket, { mode: "submission", secure: true })
+        (socket) => {
+          this.trackSocket(this.socketGroups.submissionTls, socket);
+          this.handleSmtp(socket, { mode: "submission", secure: true });
+        }
       );
 
       await this.listen(
@@ -94,7 +114,10 @@ export class PostOfficeServer {
           cert: this.tlsMaterial.cert,
           key: this.tlsMaterial.key
         },
-        (socket) => this.handlePop3(socket, true, true)
+        (socket) => {
+          this.trackSocket(this.socketGroups.pop3Tls, socket);
+          this.handlePop3(socket, true, true);
+        }
       );
 
       await this.listen(this.pop3TlsServer, this.config.server.pop3.tlsPort, this.config.server.pop3.host);
@@ -119,6 +142,13 @@ export class PostOfficeServer {
   }
 
   async stop() {
+    if (this.stopping) {
+      return;
+    }
+
+    this.stopping = true;
+    this.destroyTrackedSockets();
+
     await Promise.all([
       this.closeServer(this.smtpServer),
       this.closeServer(this.submissionServer),
@@ -161,8 +191,40 @@ export class PostOfficeServer {
     }
 
     await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
+      try {
+        server.close((error) => {
+          if (!error || error.code === "ERR_SERVER_NOT_RUNNING") {
+            resolve();
+            return;
+          }
+
+          reject(error);
+        });
+      } catch (error) {
+        if (error?.code === "ERR_SERVER_NOT_RUNNING") {
+          resolve();
+          return;
+        }
+
+        reject(error);
+      }
     });
+  }
+
+  trackSocket(group, socket) {
+    group.add(socket);
+    socket.on("close", () => {
+      group.delete(socket);
+    });
+  }
+
+  destroyTrackedSockets() {
+    for (const group of Object.values(this.socketGroups)) {
+      for (const socket of group) {
+        socket.destroy();
+      }
+      group.clear();
+    }
   }
 
   wrapSocketForStartTls(socket) {

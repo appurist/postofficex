@@ -28,8 +28,14 @@ async function main() {
   const store = new MailboxStore(config);
   const server = new PostOfficeServer(config, store, logger);
   await server.start();
+  let shuttingDown = false;
 
   const shutdown = async (signal) => {
+    if (shuttingDown) {
+      return;
+    }
+
+    shuttingDown = true;
     logger.info("server.stopping", { signal });
     await server.stop();
     process.exit(0);

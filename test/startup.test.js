@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { formatStartupError } from "../src/index.js";
+import { setupServer } from "./helpers.js";
 
 describe("startup errors", () => {
   test("formats missing config errors clearly", () => {
@@ -39,5 +40,12 @@ describe("startup errors", () => {
 
     expect(message).toContain("0.0.0.0:80");
     expect(message).toContain("Failed to listen at 0.0.0.0");
+  });
+
+  test("server.stop is idempotent while listeners are already closing", async () => {
+    const active = await setupServer();
+
+    await expect(active.server.stop()).resolves.toBeUndefined();
+    await expect(active.server.stop()).resolves.toBeUndefined();
   });
 });
