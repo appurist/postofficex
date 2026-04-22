@@ -94,7 +94,8 @@ Use the submission listeners for mail clients:
 
 Submission uses the configured mail users:
 
-- `username` is the SMTP `AUTH` login name
+- `username` is the primary POP3 and SMTP `AUTH` login name
+- the server also accepts one of the user's configured full email addresses as the login name
 - `passwordHash` is used for SMTP `AUTH` and POP3 `PASS`
 - submitted `MAIL FROM` must match one of that user's configured `addresses`
 

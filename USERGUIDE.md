@@ -309,8 +309,8 @@ Important:
 
 Each entry in `users` defines:
 
-- the POP3 login name
-- the SMTP submission login name
+- the primary POP3 login name
+- the primary SMTP submission login name
 - the mailbox folder name on disk
 - the password hash used for POP3 login and SMTP submission auth
 - the full email addresses that deliver into that mailbox
@@ -333,12 +333,20 @@ Example:
 
 - Used for POP3 `USER`.
 - Used for SMTP submission `AUTH`.
+- The server also accepts any one of that user's configured full email addresses as an alternate POP3 or SMTP submission login.
 - Case is normalized to lowercase when config is loaded.
 
 Example:
 
 ```text
 USER alice
+PASS your-password
+```
+
+Also accepted when `alice@example.com` belongs to that same user:
+
+```text
+USER alice@example.com
 PASS your-password
 ```
 
@@ -427,7 +435,7 @@ SMTP submission is for your own mail clients, not for arbitrary internet senders
 For submission:
 
 1. The client connects to `server.submission.port` or `server.submission.tlsPort`.
-2. The client authenticates with a configured `username` and matching password.
+2. The client authenticates with either the configured `username` or one of that user's configured email addresses, plus the matching password.
 3. `MAIL FROM` must match one of that user's configured `addresses`.
 4. Local-only recipients are stored directly in local mailboxes.
 5. Submitted messages with external recipients are delivered outbound to recipient MX hosts.
@@ -451,6 +459,7 @@ Example:
 Results:
 
 - login as `alice` is allowed
+- login as `alice@example.com` is also allowed
 - `MAIL FROM:<alice@example.com>` is allowed
 - `MAIL FROM:<sales@example.com>` is allowed
 - `MAIL FROM:<bob@example.com>` is rejected for that login
@@ -571,7 +580,7 @@ Minimum SMTP test:
 Minimum POP3 test:
 
 1. Connect to the POP3 port.
-2. Send `USER` with `users[].username`.
+2. Send `USER` with either `users[].username` or one of that user's configured full email addresses.
 3. Send `PASS` with the password that matches `passwordHash`.
 4. Use `STAT`, `LIST`, and `RETR`.
 
@@ -598,7 +607,7 @@ Check all of the following:
 
 Check all of the following:
 
-- `USER` matches `username`.
+- `USER` matches either `username` or one of that user's configured full email addresses.
 - `passwordHash` was generated from the password you are testing.
 - If `allowPlaintext` is `false`, you are using TLS.
 
@@ -607,7 +616,7 @@ Check all of the following:
 Check all of the following:
 
 - You are connecting to the submission port, not the inbound SMTP port.
-- `username` matches a configured user.
+- The login matches either a configured `username` or one of that user's configured full email addresses.
 - The password matches that user's `passwordHash`.
 - If `server.submission.allowPlaintext` is `false`, the client is using TLS or `STARTTLS`.
 
