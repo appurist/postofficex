@@ -265,7 +265,8 @@ function renderAdminPage(config, flash = "") {
           <div class="inline"><input name="submissionEnableStartTls" type="checkbox" ${config.server.submission.enableStartTls ? "checked" : ""}><span>Enable submission STARTTLS</span></div>
           <div class="inline"><input name="submissionEnableTls" type="checkbox" ${config.server.submission.enableTls ? "checked" : ""}><span>Enable implicit TLS submission</span></div>
           <div class="inline"><input name="pop3AllowPlaintext" type="checkbox" ${config.server.pop3.allowPlaintext ? "checked" : ""}><span>Allow plaintext POP3 login</span></div>
-          <div class="inline"><input name="pop3EnableTls" type="checkbox" ${config.server.pop3.enableTls ? "checked" : ""}><span>Enable POP3 TLS</span></div>
+          <div class="inline"><input name="pop3EnableStartTls" type="checkbox" ${config.server.pop3.enableStartTls ? "checked" : ""}><span>Enable POP3 STLS</span></div>
+          <div class="inline"><input name="pop3EnableTls" type="checkbox" ${config.server.pop3.enableTls ? "checked" : ""}><span>Enable implicit TLS POP3</span></div>
           <h3>Outbound Delivery</h3>
           <div class="row">
             <div>
@@ -633,6 +634,7 @@ export class AdminUiServer {
             port: numberFromForm(form, "pop3Port", this.config.server.pop3.port),
             tlsPort: numberFromForm(form, "pop3TlsPort", this.config.server.pop3.tlsPort),
             allowPlaintext: boolFromForm(form, "pop3AllowPlaintext"),
+            enableStartTls: boolFromForm(form, "pop3EnableStartTls"),
             enableTls: boolFromForm(form, "pop3EnableTls")
           }
         },

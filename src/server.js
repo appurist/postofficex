@@ -881,7 +881,7 @@ export class PostOfficeServer {
               write("-ERR TLS already active\r\n");
               return;
             }
-            if (!this.config.server.pop3.enableTls) {
+            if (!this.config.server.pop3.enableStartTls) {
               write("-ERR TLS unavailable\r\n");
               return;
             }

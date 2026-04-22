@@ -12,7 +12,8 @@ PostOfficeX is a Bun-based mail server that accepts inbound email over SMTP, sup
 - Attachment metadata extraction into sidecar JSON
 - POP3 retrieval with `STAT`, `LIST`, `UIDL`, `RETR`, `DELE`, `RSET`, `QUIT`
 - Standard POP3 delete-on-`QUIT` semantics
-- Optional SMTP `STARTTLS` and POP3 implicit TLS / `STLS`
+- Implicit TLS client listeners on `465` (submission) and `995` (POP3)
+- Optional SMTP `STARTTLS` and POP3 `STLS` configuration, with Bun deployment caveats
 - Optional admin HTML UI for editing global settings and users
 - Optional admin `/ping` JSON health endpoint on the admin port
 - Optional HTTPS for the admin listener using the configured TLS certificate and key
@@ -89,7 +90,7 @@ Messages are stored beneath the configured storage root, by default `./data`:
 
 Use the submission listeners for mail clients:
 
-- `587`: SMTP submission with `AUTH` and optional `STARTTLS`
+- `587`: SMTP submission with `AUTH`
 - `465`: implicit TLS SMTP submission
 
 Submission uses the configured mail users:
@@ -100,6 +101,28 @@ Submission uses the configured mail users:
 - submitted `MAIL FROM` must match one of that user's configured `addresses`
 
 Local-only submitted messages are stored directly in local mailboxes. Submitted messages with external recipients are delivered outbound to the recipient domain's MX hosts.
+
+## TLS Decision
+
+This deployment currently uses implicit TLS on dedicated ports as the supported client path:
+
+- `465` for SMTP submission
+- `995` for POP3
+
+Finding:
+
+- Bun's server-side plain-socket upgrade path is not currently reliable here for SMTP `STARTTLS` / POP3 `STLS`.
+
+Decision:
+
+- keep implicit TLS enabled on dedicated ports
+- keep `STARTTLS` / `STLS` disabled in production config until Bun's upgrade path is verified working
+
+Operationally, this means:
+
+- mail clients should use `465` instead of `587 STARTTLS`
+- mail clients should use `995` instead of `110 STLS`
+- inbound SMTP on `25` currently runs without `STARTTLS`
 
 ## Notes
 

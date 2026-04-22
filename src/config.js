@@ -40,6 +40,7 @@ export async function loadConfig(configPath) {
         port: parsed.server?.pop3?.port ?? 110,
         tlsPort: parsed.server?.pop3?.tlsPort ?? 995,
         allowPlaintext: parsed.server?.pop3?.allowPlaintext ?? false,
+        enableStartTls: parsed.server?.pop3?.enableStartTls ?? false,
         enableTls: parsed.server?.pop3?.enableTls ?? true
       }
     },

@@ -38,7 +38,7 @@ If the config file is missing or invalid, startup fails with a configuration err
       "port": 587,
       "tlsPort": 465,
       "allowPlaintext": false,
-      "enableStartTls": true,
+      "enableStartTls": false,
       "enableTls": true
     },
     "pop3": {
@@ -46,6 +46,7 @@ If the config file is missing or invalid, startup fails with a configuration err
       "port": 110,
       "tlsPort": 995,
       "allowPlaintext": false,
+      "enableStartTls": false,
       "enableTls": true
     }
   },
@@ -116,8 +117,9 @@ If the config file is missing or invalid, startup fails with a configuration err
   - Use `995` for standard POP3-over-TLS.
 - `allowPlaintext`: Controls whether `USER`/`PASS` can be used before TLS.
   - If `false`, clients must use implicit TLS on `tlsPort` or upgrade with `STLS`.
-- `enableTls`: Enables POP3 TLS support.
-  - If `true`, `tls.certFile` and `tls.keyFile` must exist and be readable.
+- `enableStartTls`: Enables `STLS` on the plain POP3 port.
+- `enableTls`: Enables the implicit TLS POP3 listener on `tlsPort`.
+  - If either TLS option is enabled, `tls.certFile` and `tls.keyFile` must exist and be readable.
 
 ### `server.submission`
 
@@ -132,6 +134,14 @@ If the config file is missing or invalid, startup fails with a configuration err
   - If `false`, clients on `port` must use `STARTTLS` before `AUTH`.
 - `enableStartTls`: Enables `STARTTLS` on the plain submission port.
 - `enableTls`: Enables the implicit TLS submission listener on `tlsPort`.
+
+For Bun deployments, implicit TLS on `465` and `995` is the recommended client path. Plain-port upgrade commands (`STARTTLS` / `STLS`) should remain disabled until Bun's server-side socket upgrade path is reliable.
+
+Deployment finding and decision:
+
+- Finding: on this Bun deployment, server-side upgrades from plaintext to TLS on an existing socket were not reliable for SMTP `STARTTLS` or POP3 `STLS`.
+- Decision: use implicit TLS by port number for clients, keep `465` and `995` enabled, and leave plain-port TLS upgrades disabled until Bun's upgrade path is verified working.
+- Client guidance: configure mail clients for implicit TLS on `465` for submission and `995` for POP3.
 
 Submission is separate from inbound SMTP:
 

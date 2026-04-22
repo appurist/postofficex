@@ -12,7 +12,7 @@
       "port": 587,
       "tlsPort": 465,
       "allowPlaintext": false,
-      "enableStartTls": true,
+      "enableStartTls": false,
       "enableTls": true
     },
     "pop3": {
@@ -20,6 +20,7 @@
       "port": 110,
       "tlsPort": 995,
       "allowPlaintext": false,
+      "enableStartTls": false,
       "enableTls": true
     }
   },
