@@ -4,19 +4,18 @@ This guide explains how to configure PostOfficeX, how global server settings wor
 
 ## Overview
 
-PostOfficeX reads one JSON config file at startup. By default it looks for `./config.json` relative to the current working directory. You can override that with `POSTOFFICEX_CONFIG`.
+PostOfficeX reads `./local.json` at startup by default. It also expects sibling `defaults.json` and `users.json` files in the same directory. If `./local.json` is missing, it falls back to `/etc/postofficex/local.json`. You can also pass `--config /path/to/local.json`.
 
 Example:
 
 ```bash
-POSTOFFICEX_CONFIG=./config.json ./postofficex
+./postofficex
 ```
 
 On Windows:
 
 ```powershell
-$env:POSTOFFICEX_CONFIG="C:\mail\config.json"
-.\postofficex.exe
+.\postofficex.exe --config "C:\mail\local.json"
 ```
 
 If the config file is missing or invalid, startup fails with a configuration error message.
@@ -27,7 +26,9 @@ To print the application version without loading config or starting listeners:
 bun run src/index.js --version
 ```
 
-## Full Config Example
+## Config Files
+
+`defaults.json`
 
 ```json
 {
@@ -35,7 +36,6 @@ bun run src/index.js --version
     "smtp": {
       "host": "0.0.0.0",
       "port": 25,
-      "hostname": "mail.example.com",
       "allowPlaintext": true,
       "enableStartTls": true
     },
@@ -65,7 +65,6 @@ bun run src/index.js --version
     }
   },
   "outbound": {
-    "greetingHostname": "mail.example.com",
     "connectTimeoutMs": 30000,
     "preferStartTls": true
   },
@@ -89,22 +88,46 @@ bun run src/index.js --version
     "enableTls": false,
     "password": "",
     "passwordHash": ""
-  },
+  }
+}
+```
+
+`local.json`
+
+```json
+{
+  "hostname": "mail.example.com",
   "domains": [
     "example.com"
   ],
-  "users": [
-    {
-      "username": "alice",
-      "mailbox": "alice",
-      "passwordHash": "$argon2id$...",
-      "addresses": [
-        "alice@example.com",
-        "support@example.com"
-      ]
+  "admin": {
+    "passwordHash": "$argon2id$..."
+  },
+  "server": {
+    "smtp": {
+      "hostname": "mx.example.com"
     }
-  ]
+  },
+  "outbound": {
+    "greetingHostname": "ehlo.example.com"
+  }
 }
+```
+
+`users.json`
+
+```json
+[
+  {
+    "username": "alice",
+    "mailbox": "alice",
+    "passwordHash": "$argon2id$...",
+    "addresses": [
+      "alice@example.com",
+      "support@example.com"
+    ]
+  }
+]
 ```
 
 ## Global Configuration
@@ -115,8 +138,8 @@ bun run src/index.js --version
 - `port`: SMTP port to listen on.
   - Use `25` for real internet-facing inbound email.
   - `2525` is useful for testing.
-- `hostname`: The SMTP greeting hostname shown in the `220` banner and `EHLO` response.
-  - This should usually be the mail hostname for your server, such as `mail.example.com`.
+- `hostname`: Optional SMTP-only hostname override.
+  - If omitted, PostOfficeX uses the global `hostname` from `local.json`.
 - `allowPlaintext`: Currently not enforced by SMTP logic. It is safe to leave `true` unless you plan to extend the server.
 - `enableStartTls`: Enables SMTP `STARTTLS`.
   - If `true`, `tls.certFile` and `tls.keyFile` must exist and be readable.
@@ -185,8 +208,8 @@ Submission is separate from inbound SMTP:
 
 `outbound` controls how submitted external mail is sent to recipient MX hosts.
 
-- `greetingHostname`: Hostname used in outbound `EHLO`.
-  - This should normally match your mail hostname such as `mail.example.com`.
+- `greetingHostname`: Optional outbound `EHLO` override.
+  - If omitted, PostOfficeX uses `server.smtp.hostname`, which itself falls back to `local.json.hostname`.
 - `connectTimeoutMs`: Outbound connection timeout per target host.
 - `preferStartTls`: If `true`, PostOfficeX attempts `STARTTLS` when the remote server advertises it.
 
@@ -201,11 +224,11 @@ Important:
 - `certFile`: Path to the PEM certificate file.
 - `keyFile`: Path to the PEM private key file.
 
-These paths are resolved relative to the directory containing `config.json`.
+These paths are resolved relative to the directory containing `local.json`.
 
 Example:
 
-- `config.json` at `/opt/postofficex/config.json`
+- `local.json` at `/opt/postofficex/local.json`
 - `certFile` set to `./certs/server.crt`
 - actual certificate path becomes `/opt/postofficex/certs/server.crt`
 
@@ -221,7 +244,7 @@ Example:
 
 - `rootDir`: Root folder for all stored messages and metadata.
 
-This path is also resolved relative to the directory containing `config.json`.
+This path is also resolved relative to the directory containing `local.json`.
 
 Example:
 
@@ -293,7 +316,7 @@ If you keep `tls.certFile` and `tls.keyFile` pointed at `./certs/server.crt` and
 Recommended startup:
 
 ```bash
-POSTOFFICEX_CONFIG=./config.json POSTOFFICEX_PID_FILE=./postofficex.pid bun run src/index.js
+POSTOFFICEX_PID_FILE=./postofficex.pid bun run src/index.js
 ```
 
 Issue the first certificate:
@@ -322,7 +345,7 @@ The repo includes `postofficex.service` for hosts that run PostOfficeX under `sy
 It sets:
 
 - `WorkingDirectory=/root/postofficex`
-- `POSTOFFICEX_CONFIG=/root/postofficex/config.json`
+- built-in config lookup from `./local.json`
 - `POSTOFFICEX_PID_FILE=/root/postofficex/postofficex.pid`
 
 Install it with:
@@ -583,7 +606,7 @@ For public deployment:
 - Use submission port `587`.
 - Use implicit TLS submission port `465`.
 - Use POP3 port `110` and/or implicit TLS port `995`.
-- Set `server.smtp.hostname` to your real mail hostname.
+- Set `local.json.hostname` to your real mail hostname.
 - Set SMTP `enableStartTls`, submission `enableStartTls`, submission `enableTls`, and POP3 `enableTls` to `true`.
 - Set `server.pop3.allowPlaintext` to `false`.
 - Set `server.submission.allowPlaintext` to `false`.
@@ -685,5 +708,5 @@ If you receive a sender rejection, check that:
 Check all of the following:
 
 - `enableStartTls` or `enableTls` is only set if certificate files exist.
-- `certFile` and `keyFile` paths are correct relative to `config.json`.
+- `certFile` and `keyFile` paths are correct relative to `local.json`.
 - The process can read both files.

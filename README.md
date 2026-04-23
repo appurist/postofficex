@@ -21,17 +21,18 @@ PostOfficeX is a Bun-based mail server that accepts inbound email over SMTP, sup
 
 ## Quick Start
 
-1. Copy `config.example.json` to `config.json`.
+1. Copy `defaults.example.json`, `local.example.json`, and `users.example.json` to `defaults.json`, `local.json`, and `users.json`.
 2. Generate a password hash:
 
 ```bash
 bun -e "console.log(await Bun.password.hash('change-me'))"
 ```
 
-3. Put the hash into `config.json`.
-4. Update domains, users, ports, and TLS paths as needed.
+3. Put the hash into `users.json` for mail users, and into `local.json` if you want to enable the admin UI.
+4. Update `local.json` with your `hostname`, `domains`, and admin password hash.
+   Override other defaults only if you need to.
    The example config does not create any mail users by default, so define at least one user before testing SMTP, submission, POP3, or IMAP.
-   To enable the admin UI, set `admin.password` or `admin.passwordHash` in `config.json`.
+   To enable the admin UI, set `admin.password` or `admin.passwordHash` in `local.json`.
 5. Start the server:
 
 ```bash
@@ -44,7 +45,7 @@ To print the application version without starting listeners:
 bun run src/index.js --version
 ```
 
-If `config.json` is missing or unreadable, startup now reports a direct configuration error that includes the expected path and suggests setting `POSTOFFICEX_CONFIG`.
+If `local.json`, `defaults.json`, or `users.json` is missing or unreadable, startup reports a direct configuration error that includes the expected path. By default the server checks `./local.json` first and then `/etc/postofficex/local.json`.
 
 Or build a single Bun-targeted binary:
 
@@ -55,7 +56,7 @@ bun build --compile ./src/index.js --outfile postofficex
 Then run it with:
 
 ```bash
-POSTOFFICEX_CONFIG=./config.json ./postofficex
+./postofficex
 ```
 
 On Windows, Bun compile output is an `.exe`. If you build on Windows, expect `postofficex.exe`. To cross-compile a Windows binary from another platform, use Bun's Windows target, for example:
@@ -84,6 +85,18 @@ Important:
 
 - `/ping` is only available when the admin listener is enabled.
 - The admin listener only starts when `admin.password` or `admin.passwordHash` is set.
+
+## Config Layout
+
+PostOfficeX now reads three sibling files:
+
+- `defaults.json`: baseline server/runtime settings shared by most installs
+- `local.json`: hostname, domains, admin password, and any local overrides
+- `users.json`: mailbox users and addresses
+
+`local.json.hostname` is the normal single place to set the mail hostname. It feeds SMTP greetings, message IDs, and outbound `EHLO` unless you set a narrower override such as `server.smtp.hostname` or `outbound.greetingHostname`.
+
+One mailbox can have multiple recipient addresses through a single user entry. Put every address for that mailbox in the same user's `addresses` array.
 
 ## Storage Layout
 
@@ -149,7 +162,7 @@ Operationally, this means:
 
 ## Let's Encrypt
 
-The server reads its TLS material from the paths in `config.json`. Your current config already points to:
+The server reads its TLS material from the paths in `defaults.json` and `local.json`. The default baseline points to:
 
 ```json
 "tls": {
@@ -164,7 +177,7 @@ This repo now includes a Certbot flow that keeps those filenames stable while re
 2. Start PostOfficeX with a PID file so the deploy hook can signal it:
 
 ```bash
-POSTOFFICEX_CONFIG=./config.json POSTOFFICEX_PID_FILE=./postofficex.pid bun run src/index.js
+POSTOFFICEX_PID_FILE=./postofficex.pid bun run src/index.js
 ```
 
 3. Issue the certificate for your mail host:
@@ -187,7 +200,6 @@ After renewals, the hook sends `SIGHUP` to the running process through `postoffi
 This repo also includes a `systemd` unit at `./postofficex.service`. It runs the server from the repo root with:
 
 ```bash
-POSTOFFICEX_CONFIG=/root/postofficex/config.json
 POSTOFFICEX_PID_FILE=/root/postofficex/postofficex.pid
 ```
 

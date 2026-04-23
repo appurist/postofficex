@@ -6,16 +6,16 @@
 - `test/`: Bun test suite. Add new protocol and regression coverage here.
 - `scripts/`: operational helpers, including Let’s Encrypt install/deploy hooks.
 - `certs/`: active local TLS files used by the app.
-- `config.example.json`: baseline configuration template.
+- `defaults.example.json`, `local.example.json`, `users.example.json`: baseline configuration templates.
 - `postofficex.service`: example `systemd` unit for Linux deployments.
 - `README.md`, `USERGUIDE.md`, `TODO.md`: operator docs and tracked follow-up work.
 
 ## Build, Test, and Development Commands
 
-- `bun run src/index.js` or `pnpm start`: run the server with `./config.json`.
+- `bun run src/index.js` or `pnpm start`: run the server with `./local.json`.
 - `pnpm test`: run the full Bun test suite.
 - `pnpm build`: compile a standalone binary named `postofficex` (or `postofficex.exe` on Windows).
-- `POSTOFFICEX_CONFIG=./config.json bun run src/index.js`: run against an explicit config path.
+- `bun run src/index.js --config ./local.json`: run against an explicit config path.
 
 Use the helper scripts only when working on a Linux host that matches the documented deployment layout.
 
@@ -43,5 +43,5 @@ Use the helper scripts only when working on a Linux host that matches the docume
 ## Security & Configuration Tips
 
 - Never commit real production secrets or private keys.
-- Treat `config.json` as local/operator-specific; update `config.example.json` when config shape changes.
+- Treat `local.json` and `users.json` as local/operator-specific; update the example config files when the config shape changes.
 - For direct public TLS, use publicly trusted certificates, not Cloudflare Origin certs.

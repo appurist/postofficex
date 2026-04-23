@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { connect, expectOk, pop3Command, readUntil, setupServer } from "./helpers.js";
 
@@ -152,5 +152,38 @@ describe("PostOfficeX", () => {
     expectOk(await pop3Command(pop3b, "PASS secret123\r\n"));
     expect(await pop3Command(pop3b, "STAT\r\n")).toContain("+OK 1");
     expectOk(await pop3Command(pop3b, "QUIT\r\n"));
+  });
+
+  test("ignores non-message json files in inbox metadata during POP3 access", async () => {
+    activeServer = await setupServer();
+
+    const smtp = await connect(activeServer.smtpPort);
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    smtp.write("EHLO localhost\r\n");
+    await readUntil(smtp, (text) => text.includes("250 SIZE"));
+    smtp.write("MAIL FROM:<sender@external.test>\r\n");
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    smtp.write("RCPT TO:<alice@example.test>\r\n");
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    smtp.write("DATA\r\n");
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    smtp.write("Subject: Meta noise\r\n\r\nbody\r\n.\r\n");
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    smtp.end();
+
+    await writeFile(
+      join(activeServer.rootDir, "data", "mailboxes", "alice", "meta", "noise.json"),
+      JSON.stringify({ name: "INBOX", subscribed: true }, null, 2),
+      "utf8"
+    );
+
+    const pop3 = await connect(activeServer.pop3Port);
+    await readUntil(pop3, (text) => text.endsWith("\r\n"));
+    expectOk(await pop3Command(pop3, "USER alice\r\n"));
+    expectOk(await pop3Command(pop3, "PASS secret123\r\n"));
+    expect(await pop3Command(pop3, "STAT\r\n")).toContain("+OK 1");
+    const retr = await pop3Command(pop3, "RETR 1\r\n", true);
+    expect(retr).toContain("Subject: Meta noise");
+    expectOk(await pop3Command(pop3, "QUIT\r\n"));
   });
 });

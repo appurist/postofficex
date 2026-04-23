@@ -1,24 +1,61 @@
-import { rm, writeFile } from "node:fs/promises";
+import { access, rm, writeFile } from "node:fs/promises";
 import { loadConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { PostOfficeServer } from "./server.js";
 import { MailboxStore } from "./storage.js";
 import { formatVersionLine } from "./version.js";
 
-const configPath = process.env.POSTOFFICEX_CONFIG ?? "./config.json";
+const DEFAULT_CONFIG_PATHS = ["./local.json", "/etc/postofficex/local.json"];
 const pidFile = process.env.POSTOFFICEX_PID_FILE ?? "";
 
 export function argsRequestVersion(argv = process.argv.slice(2)) {
   return argv.includes("--version") || argv.includes("-v");
 }
 
-export function formatStartupError(error, resolvedConfigPath = configPath) {
+export function parseConfigPathArg(argv = process.argv.slice(2)) {
+  const index = argv.findIndex((item) => item === "--config" || item === "-c");
+  if (index === -1) {
+    return null;
+  }
+
+  const value = argv[index + 1]?.trim();
+  if (!value) {
+    throw new Error("Missing value for --config");
+  }
+  return value;
+}
+
+export async function resolveConfigPath(argv = process.argv.slice(2)) {
+  const explicitPath = parseConfigPathArg(argv);
+  if (explicitPath) {
+    return explicitPath;
+  }
+
+  for (const candidate of DEFAULT_CONFIG_PATHS) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
+  return DEFAULT_CONFIG_PATHS[0];
+}
+
+export function formatStartupError(error, resolvedConfigPath = DEFAULT_CONFIG_PATHS[0]) {
   if (error && typeof error === "object") {
     if (error.code === "ENOENT") {
-      return `Configuration file not found at ${resolvedConfigPath}. Copy config.example.json to config.json or set POSTOFFICEX_CONFIG to the correct path.`;
+      const missingPath = error.path ?? resolvedConfigPath;
+      return `Configuration file not found at ${missingPath}. Ensure local.json, defaults.json, and users.json exist, or pass --config /path/to/local.json.`;
     }
 
     if (error instanceof SyntaxError) {
+      if (error.message.startsWith("Configuration file at ")) {
+        return error.message;
+      }
       return `Configuration file at ${resolvedConfigPath} is not valid JSON: ${error.message}`;
     }
 
@@ -31,11 +68,13 @@ export function formatStartupError(error, resolvedConfigPath = configPath) {
 }
 
 async function main() {
+  const argv = process.argv.slice(2);
   if (argsRequestVersion()) {
     console.log(formatVersionLine());
     return;
   }
 
+  const configPath = await resolveConfigPath(argv);
   const config = await loadConfig(configPath);
   const store = new MailboxStore(config);
   const server = new PostOfficeServer(config, store, logger);
@@ -83,7 +122,12 @@ async function main() {
 }
 
 if (import.meta.main) {
+  const argv = process.argv.slice(2);
   void main().catch((error) => {
+    let configPath = DEFAULT_CONFIG_PATHS[0];
+    try {
+      configPath = parseConfigPathArg(argv) ?? configPath;
+    } catch {}
     logger.error("server.crash", { configPath });
     console.log(formatStartupError(error, configPath));
     process.exit(1);

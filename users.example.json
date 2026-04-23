@@ -1,0 +1,11 @@
+[
+  {
+    "username": "alice",
+    "mailbox": "alice",
+    "passwordHash": "",
+    "addresses": [
+      "alice@example.com",
+      "support@example.com"
+    ]
+  }
+]

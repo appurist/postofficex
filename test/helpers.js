@@ -8,6 +8,67 @@ import { loadConfig } from "../src/config.js";
 import { PostOfficeServer } from "../src/server.js";
 import { MailboxStore } from "../src/storage.js";
 
+const socketReaders = new WeakMap();
+
+function getSocketReader(socket) {
+  let reader = socketReaders.get(socket);
+  if (reader) {
+    return reader;
+  }
+
+  reader = {
+    buffer: "",
+    waiters: [],
+    error: null,
+    ended: false
+  };
+
+  const settle = () => {
+    if (reader.error) {
+      const error = reader.error;
+      const waiters = reader.waiters.splice(0);
+      waiters.forEach(({ reject }) => reject(error));
+      return;
+    }
+
+    for (let index = 0; index < reader.waiters.length; ) {
+      const waiter = reader.waiters[index];
+      if (waiter.predicate(reader.buffer)) {
+        reader.waiters.splice(index, 1);
+        const result = reader.buffer;
+        reader.buffer = "";
+        waiter.resolve(result);
+        continue;
+      }
+      index += 1;
+    }
+
+    if (reader.ended && reader.waiters.length > 0) {
+      const error = new Error("Socket ended before predicate matched");
+      const waiters = reader.waiters.splice(0);
+      waiters.forEach(({ reject }) => reject(error));
+    }
+  };
+
+  socket.on("data", (chunk) => {
+    reader.buffer += chunk.toString("utf8");
+    settle();
+  });
+
+  socket.on("error", (error) => {
+    reader.error = error;
+    settle();
+  });
+
+  socket.on("end", () => {
+    reader.ended = true;
+    settle();
+  });
+
+  socketReaders.set(socket, reader);
+  return reader;
+}
+
 export async function createPasswordHash(password) {
   return await Bun.password.hash(password);
 }
@@ -98,8 +159,36 @@ export async function setupServer() {
     ]
   };
 
-  const configPath = join(rootDir, "config.json");
-  await writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
+  const configPath = join(rootDir, "local.json");
+  await writeFile(
+    join(rootDir, "defaults.json"),
+    JSON.stringify(
+      {
+        server: config.server,
+        outbound: config.outbound,
+        tls: config.tls,
+        limits: config.limits,
+        storage: config.storage,
+        admin: config.admin
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      {
+        hostname: config.server.smtp.hostname,
+        domains: config.domains
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  await writeFile(join(rootDir, "users.json"), JSON.stringify(config.users, null, 2), "utf8");
   const resolved = await loadConfig(configPath);
   const server = new PostOfficeServer(resolved, new MailboxStore(resolved));
   await server.start();
@@ -132,23 +221,23 @@ export function connectTls(port) {
 }
 
 export async function readUntil(socket, predicate) {
+  const reader = getSocketReader(socket);
   return await new Promise((resolve, reject) => {
-    let buffer = "";
-    const onData = (chunk) => {
-      buffer += chunk.toString("utf8");
-      if (predicate(buffer)) {
-        socket.off("data", onData);
-        socket.off("error", onError);
-        resolve(buffer);
-      }
-    };
-    const onError = (error) => {
-      socket.off("data", onData);
-      socket.off("error", onError);
-      reject(error);
-    };
-    socket.on("data", onData);
-    socket.on("error", onError);
+    if (reader.error) {
+      reject(reader.error);
+      return;
+    }
+    if (predicate(reader.buffer)) {
+      const result = reader.buffer;
+      reader.buffer = "";
+      resolve(result);
+      return;
+    }
+    if (reader.ended) {
+      reject(new Error("Socket ended before predicate matched"));
+      return;
+    }
+    reader.waiters.push({ predicate, resolve, reject });
   });
 }
 

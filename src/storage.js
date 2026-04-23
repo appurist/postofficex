@@ -368,6 +368,9 @@ export class MailboxStore {
 
     for await (const file of directory.scan({ cwd: base, absolute: true })) {
       const metadata = JSON.parse(await readFile(file, "utf8"));
+      if (!Number.isFinite(metadata?.uid)) {
+        continue;
+      }
       messages.push(metadata);
     }
 

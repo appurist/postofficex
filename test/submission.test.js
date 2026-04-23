@@ -164,8 +164,29 @@ async function setupSubmissionServer({ resolveMx } = {}) {
     ]
   };
 
-  const configPath = join(rootDir, "config.json");
-  await writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
+  const configPath = join(rootDir, "local.json");
+  await writeFile(
+    join(rootDir, "defaults.json"),
+    JSON.stringify(
+      {
+        server: config.server,
+        outbound: config.outbound,
+        tls: config.tls,
+        limits: config.limits,
+        storage: config.storage,
+        admin: config.admin
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  await writeFile(
+    configPath,
+    JSON.stringify({ hostname: config.server.smtp.hostname, domains: config.domains }, null, 2),
+    "utf8"
+  );
+  await writeFile(join(rootDir, "users.json"), JSON.stringify(config.users, null, 2), "utf8");
   const resolved = await loadConfig(configPath);
   const server = new PostOfficeServer(resolved, new MailboxStore(resolved), undefined, {
     outbound: resolveMx ? { resolveMx } : undefined

@@ -208,10 +208,16 @@ function renderUserEditor(user) {
 
 function renderAdminPage(config, flash = "") {
   const usersHtml = config.users.map(renderUserEditor).join("");
+  const sourceSummary =
+    config.sources?.mode === "layered"
+      ? `Local <span class="mono">${escapeHtml(config.sources.localConfigPath)}</span><br>Defaults <span class="mono">${escapeHtml(config.sources.defaultsConfigPath)}</span><br>Users <span class="mono">${escapeHtml(config.sources.usersConfigPath)}</span>`
+      : `<span class="mono">${escapeHtml(config.configPath)}</span>`;
+  const smtpHostnameOverride = config.local?.server?.smtp?.hostname ?? "";
+  const outboundGreetingHostnameOverride = config.local?.outbound?.greetingHostname ?? "";
   const body = `<div class="topbar">
       <div>
         <h1>${APP_DISPLAY_NAME} Admin</h1>
-        <p>Version ${escapeHtml(APP_VERSION)}. Admin UI changes are written back to <span class="mono">${escapeHtml(config.configPath)}</span>.<br>Listener host, port, and TLS material changes may require a restart.</p>
+        <p>Version ${escapeHtml(APP_VERSION)}. Admin UI changes are written back to ${sourceSummary}.<br>Listener host, port, and TLS material changes may require a restart.</p>
       </div>
       <form method="post" action="/logout">
         <button class="secondary" type="submit">Log out</button>
@@ -222,6 +228,10 @@ function renderAdminPage(config, flash = "") {
         <h2>Global Settings</h2>
         <form method="post" action="/config/global">
           <div class="row">
+            <div>
+              <label>Mail hostname</label>
+              <input name="hostname" value="${escapeHtml(config.hostname)}" required>
+            </div>
             <div>
               <label>SMTP host</label>
               <input name="smtpHost" value="${escapeHtml(config.server.smtp.host)}" required>
@@ -273,8 +283,8 @@ function renderAdminPage(config, flash = "") {
               <input name="imapTlsPort" type="number" value="${escapeHtml(config.server.imap.tlsPort)}" required>
             </div>
           </div>
-          <label>SMTP hostname</label>
-          <input name="smtpHostname" value="${escapeHtml(config.server.smtp.hostname)}" required>
+          <label>SMTP hostname override</label>
+          <input name="smtpHostnameOverride" value="${escapeHtml(smtpHostnameOverride)}" placeholder="Leave blank to use the global mail hostname">
           <div class="inline"><input name="smtpAllowPlaintext" type="checkbox" ${config.server.smtp.allowPlaintext ? "checked" : ""}><span>Allow plaintext SMTP</span></div>
           <div class="inline"><input name="smtpEnableStartTls" type="checkbox" ${config.server.smtp.enableStartTls ? "checked" : ""}><span>Enable SMTP STARTTLS</span></div>
           <div class="inline"><input name="submissionAllowPlaintext" type="checkbox" ${config.server.submission.allowPlaintext ? "checked" : ""}><span>Allow plaintext authenticated submission</span></div>
@@ -289,8 +299,8 @@ function renderAdminPage(config, flash = "") {
           <h3>Outbound Delivery</h3>
           <div class="row">
             <div>
-              <label>Outbound EHLO hostname</label>
-              <input name="outboundGreetingHostname" value="${escapeHtml(config.outbound.greetingHostname)}" required>
+              <label>Outbound EHLO hostname override</label>
+              <input name="outboundGreetingHostnameOverride" value="${escapeHtml(outboundGreetingHostnameOverride)}" placeholder="Leave blank to use the SMTP/global hostname">
             </div>
             <div>
               <label>Outbound connect timeout (ms)</label>
@@ -630,13 +640,46 @@ export class AdminUiServer {
 
     if (url.pathname === "/config/global" && method === "POST") {
       const form = await this.readForm(request);
+      const smtpHostnameOverride = form.get("smtpHostnameOverride")?.trim() ?? "";
+      const outboundGreetingHostnameOverride = form.get("outboundGreetingHostnameOverride")?.trim() ?? "";
+      const nextLocal = structuredClone(this.config.local ?? {});
+
+      nextLocal.hostname = form.get("hostname")?.trim() || this.config.hostname;
+      if (smtpHostnameOverride) {
+        nextLocal.server = nextLocal.server ?? {};
+        nextLocal.server.smtp = { ...(nextLocal.server.smtp ?? {}), hostname: smtpHostnameOverride };
+      } else if (nextLocal.server?.smtp) {
+        delete nextLocal.server.smtp.hostname;
+        if (Object.keys(nextLocal.server.smtp).length === 0) {
+          delete nextLocal.server.smtp;
+        }
+        if (Object.keys(nextLocal.server).length === 0) {
+          delete nextLocal.server;
+        }
+      }
+
+      if (outboundGreetingHostnameOverride) {
+        nextLocal.outbound = {
+          ...(nextLocal.outbound ?? {}),
+          greetingHostname: outboundGreetingHostnameOverride
+        };
+      } else if (nextLocal.outbound) {
+        delete nextLocal.outbound.greetingHostname;
+        if (Object.keys(nextLocal.outbound).length === 0) {
+          delete nextLocal.outbound;
+        }
+      }
+
       const nextConfig = {
         ...this.config,
+        hostname: nextLocal.hostname,
+        defaults: this.config.defaults,
+        local: nextLocal,
         server: {
           smtp: {
             host: form.get("smtpHost")?.trim() || this.config.server.smtp.host,
             port: numberFromForm(form, "smtpPort", this.config.server.smtp.port),
-            hostname: form.get("smtpHostname")?.trim() || this.config.server.smtp.hostname,
+            hostname: smtpHostnameOverride || nextLocal.hostname,
             allowPlaintext: boolFromForm(form, "smtpAllowPlaintext"),
             enableStartTls: boolFromForm(form, "smtpEnableStartTls")
           },
@@ -666,7 +709,7 @@ export class AdminUiServer {
           }
         },
         outbound: {
-          greetingHostname: form.get("outboundGreetingHostname")?.trim() || this.config.outbound.greetingHostname,
+          greetingHostname: outboundGreetingHostnameOverride || smtpHostnameOverride || nextLocal.hostname,
           connectTimeoutMs: numberFromForm(
             form,
             "outboundConnectTimeoutMs",

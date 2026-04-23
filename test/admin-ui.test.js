@@ -129,12 +129,38 @@ async function setupAdminServer({
     ]
   };
 
-  const configPath = join(rootDir, "config.json");
-  await writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
+  const configPath = join(rootDir, "local.json");
+  const configPaths = {
+    defaults: join(rootDir, "defaults.json"),
+    local: configPath,
+    users: join(rootDir, "users.json")
+  };
+  await writeFile(
+    configPaths.defaults,
+    JSON.stringify(
+      {
+        server: config.server,
+        outbound: config.outbound,
+        tls: config.tls,
+        limits: config.limits,
+        storage: config.storage,
+        admin: config.admin
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  await writeFile(
+    configPaths.local,
+    JSON.stringify({ hostname: config.server.smtp.hostname, domains: config.domains }, null, 2),
+    "utf8"
+  );
+  await writeFile(configPaths.users, JSON.stringify(config.users, null, 2), "utf8");
   const resolved = await loadConfig(configPath);
   const server = new PostOfficeServer(resolved, new MailboxStore(resolved), log);
   await server.start();
-  return { server, rootDir, configPath, adminPort };
+  return { server, rootDir, configPath, configPaths, adminPort };
 }
 
 afterEach(async () => {
@@ -266,9 +292,10 @@ describe("admin ui", () => {
       },
       redirect: "manual",
       body: new URLSearchParams({
+        hostname: "mail.changed.test",
         smtpHost: "127.0.0.1",
         smtpPort: "3526",
-        smtpHostname: "mail.changed.test",
+        smtpHostnameOverride: "",
         smtpAllowPlaintext: "on",
         submissionHost: "127.0.0.1",
         submissionPort: "3587",
@@ -282,7 +309,7 @@ describe("admin ui", () => {
         imapPort: "3143",
         imapTlsPort: "3993",
         imapEnableTls: "on",
-        outboundGreetingHostname: "mail.changed.test",
+        outboundGreetingHostnameOverride: "",
         outboundConnectTimeoutMs: "45000",
         outboundPreferStartTls: "on",
         tlsCertFile: "./missing.crt",
@@ -316,24 +343,126 @@ describe("admin ui", () => {
       }).toString()
     });
 
-    const saved = JSON.parse(await readFile(activeServer.configPath, "utf8"));
-    expect(saved.server.smtp.hostname).toBe("mail.changed.test");
-    expect(saved.server.submission.port).toBe(3587);
-    expect(saved.server.submission.tlsPort).toBe(3465);
-    expect(saved.server.imap.port).toBe(3143);
-    expect(saved.server.imap.tlsPort).toBe(3993);
-    expect(saved.server.imap.enableTls).toBe(true);
-    expect(saved.domains).toEqual(["example.test", "example.net"]);
-    expect(saved.outbound.greetingHostname).toBe("mail.changed.test");
-    expect(saved.outbound.connectTimeoutMs).toBe(45000);
-    expect(saved.outbound.preferStartTls).toBe(true);
-    expect(saved.admin.enableTls).toBe(true);
-    expect(saved.admin.logRequests).toBe(true);
-    expect(saved.users.some((user) => user.username === "bob")).toBe(true);
-    expect(saved.users.find((user) => user.username === "bob").addresses).toEqual([
+    const defaultsSaved = JSON.parse(await readFile(activeServer.configPaths.defaults, "utf8"));
+    const localSaved = JSON.parse(await readFile(activeServer.configPaths.local, "utf8"));
+    const usersSaved = JSON.parse(await readFile(activeServer.configPaths.users, "utf8"));
+    expect(defaultsSaved.server.smtp.hostname).toBe("mail.test.local");
+    expect(localSaved.hostname).toBe("mail.changed.test");
+    expect(localSaved.server.submission.port).toBe(3587);
+    expect(localSaved.server.submission.tlsPort).toBe(3465);
+    expect(localSaved.server.imap.port).toBe(3143);
+    expect(localSaved.server.imap.tlsPort).toBe(3993);
+    expect(localSaved.server.imap.enableTls).toBe(true);
+    expect(localSaved.domains).toEqual(["example.test", "example.net"]);
+    expect(localSaved.outbound.connectTimeoutMs).toBe(45000);
+    expect(localSaved.outbound.preferStartTls).toBe(true);
+    expect(localSaved.admin.enableTls).toBe(true);
+    expect(localSaved.admin.logRequests).toBe(true);
+    expect(usersSaved.some((user) => user.username === "bob")).toBe(true);
+    expect(usersSaved.find((user) => user.username === "bob").addresses).toEqual([
       "bob@example.test",
       "sales@example.net"
     ]);
+  });
+
+  test("writes layered config changes back to local.json and users.json", async () => {
+    activeServer = await setupAdminServer();
+
+    const login = await fetch(`http://127.0.0.1:${activeServer.adminPort}/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      redirect: "manual",
+      body: new URLSearchParams({ password: "adminpw" }).toString()
+    });
+    const cookie = login.headers.get("set-cookie");
+
+    const dashboard = await fetch(`http://127.0.0.1:${activeServer.adminPort}/`, {
+      headers: {
+        Cookie: cookie
+      }
+    });
+    const html = await dashboard.text();
+    expect(html).toContain(activeServer.configPaths.defaults);
+    expect(html).toContain(activeServer.configPaths.local);
+    expect(html).toContain(activeServer.configPaths.users);
+
+    await fetch(`http://127.0.0.1:${activeServer.adminPort}/config/global`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: cookie
+      },
+      redirect: "manual",
+      body: new URLSearchParams({
+        hostname: "mail.changed.test",
+        smtpHost: "127.0.0.1",
+        smtpPort: "3526",
+        smtpHostnameOverride: "",
+        smtpAllowPlaintext: "on",
+        submissionHost: "127.0.0.1",
+        submissionPort: "3587",
+        submissionTlsPort: "3465",
+        submissionAllowPlaintext: "on",
+        pop3Host: "127.0.0.1",
+        pop3Port: "3111",
+        pop3TlsPort: "3996",
+        pop3AllowPlaintext: "on",
+        imapHost: "127.0.0.1",
+        imapPort: "3143",
+        imapTlsPort: "3993",
+        imapEnableTls: "on",
+        outboundGreetingHostnameOverride: "",
+        outboundConnectTimeoutMs: "45000",
+        outboundPreferStartTls: "on",
+        tlsCertFile: "./missing.crt",
+        tlsKeyFile: "./missing.key",
+        maxMessageBytes: "1048576",
+        maxRecipientsPerMessage: "8",
+        maxMailboxBytes: "2097152",
+        socketTimeoutMs: "45000",
+        maxInvalidAuthAttempts: "4",
+        storageRootDir: "./data",
+        domains: "example.test\nexample.net",
+        adminHost: "127.0.0.1",
+        adminPort: String(activeServer.adminPort),
+        adminEnableTls: "on",
+        adminLogRequests: "on"
+      }).toString()
+    });
+
+    await fetch(`http://127.0.0.1:${activeServer.adminPort}/users/save`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: cookie
+      },
+      redirect: "manual",
+      body: new URLSearchParams({
+        username: "bob",
+        mailbox: "shared",
+        password: "bobpw",
+        addresses: "bob@example.test\nsales@example.net"
+      }).toString()
+    });
+
+    const defaultsSaved = JSON.parse(await readFile(activeServer.configPaths.defaults, "utf8"));
+    const localSaved = JSON.parse(await readFile(activeServer.configPaths.local, "utf8"));
+    const usersSaved = JSON.parse(await readFile(activeServer.configPaths.users, "utf8"));
+
+    expect(defaultsSaved.server.smtp.hostname).toBe("mail.test.local");
+    expect(localSaved.hostname).toBe("mail.changed.test");
+    expect(localSaved.server.imap.port).toBe(3143);
+    expect(localSaved.admin.enableTls).toBe(true);
+    expect(localSaved.domains).toEqual(["example.test", "example.net"]);
+    expect(usersSaved.some((user) => user.username === "bob")).toBe(true);
+    expect(usersSaved.find((user) => user.username === "bob")).toEqual({
+      username: "bob",
+      mailbox: "shared",
+      passwordHash: expect.any(String),
+      addresses: ["bob@example.test", "sales@example.net"]
+    });
   });
 
   test("rehashes a plaintext admin password after the first successful login", async () => {
@@ -350,18 +479,19 @@ describe("admin ui", () => {
 
     expect(login.status).toBe(302);
 
-    const saved = JSON.parse(await readFile(activeServer.configPath, "utf8"));
-    expect(saved.admin.password).toBe("");
-    expect(saved.admin.passwordHash).toBeTruthy();
-    expect(await Bun.password.verify("adminpw", saved.admin.passwordHash)).toBe(true);
+    const localSaved = JSON.parse(await readFile(activeServer.configPaths.local, "utf8"));
+    expect(localSaved.admin.password).toBe("");
+    expect(localSaved.admin.passwordHash).toBeTruthy();
+    expect(await Bun.password.verify("adminpw", localSaved.admin.passwordHash)).toBe(true);
   });
 
   test("uses admin.password as an override and replaces an older admin hash after login", async () => {
     activeServer = await setupAdminServer();
 
-    const original = JSON.parse(await readFile(activeServer.configPath, "utf8"));
+    const original = JSON.parse(await readFile(activeServer.configPaths.local, "utf8"));
+    original.admin = original.admin ?? {};
     original.admin.password = "newadminpw";
-    await writeFile(activeServer.configPath, JSON.stringify(original, null, 2), "utf8");
+    await writeFile(activeServer.configPaths.local, JSON.stringify(original, null, 2), "utf8");
 
     activeServer.server.applyConfig(await loadConfig(activeServer.configPath));
 
@@ -385,9 +515,9 @@ describe("admin ui", () => {
     });
     expect(login.status).toBe(302);
 
-    const saved = JSON.parse(await readFile(activeServer.configPath, "utf8"));
-    expect(saved.admin.password).toBe("");
-    expect(await Bun.password.verify("newadminpw", saved.admin.passwordHash)).toBe(true);
-    expect(await Bun.password.verify("adminpw", saved.admin.passwordHash)).toBe(false);
+    const localSaved = JSON.parse(await readFile(activeServer.configPaths.local, "utf8"));
+    expect(localSaved.admin.password).toBeUndefined();
+    expect(await Bun.password.verify("newadminpw", localSaved.admin.passwordHash)).toBe(true);
+    expect(await Bun.password.verify("adminpw", localSaved.admin.passwordHash)).toBe(false);
   });
 });
