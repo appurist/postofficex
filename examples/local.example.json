@@ -1,0 +1,9 @@
+{
+  "hostname": "mail.example.com",
+  "domains": [
+    "example.com"
+  ],
+  "admin": {
+    "passwordHash": ""
+  }
+}

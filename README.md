@@ -21,18 +21,18 @@ PostOfficeX is a Bun-based mail server that accepts inbound email over SMTP, sup
 
 ## Quick Start
 
-1. Copy `defaults.example.json`, `local.example.json`, and `users.example.json` to `defaults.json`, `local.json`, and `users.json`.
+1. Copy `examples/defaults.example.json`, `examples/local.example.json`, and `examples/users.example.json` to `data/defaults.json`, `data/local.json`, and `data/users.json`.
 2. Generate a password hash:
 
 ```bash
 bun -e "console.log(await Bun.password.hash('change-me'))"
 ```
 
-3. Put the hash into `users.json` for mail users, and into `local.json` if you want to enable the admin UI.
-4. Update `local.json` with your `hostname`, `domains`, and admin password hash.
+3. Put the hash into `data/users.json` for mail users, and into `data/local.json` if you want to enable the admin UI.
+4. Update `data/local.json` with your `hostname`, `domains`, and admin password hash.
    Override other defaults only if you need to.
    The example config does not create any mail users by default, so define at least one user before testing SMTP, submission, POP3, or IMAP.
-   To enable the admin UI, set `admin.password` or `admin.passwordHash` in `local.json`.
+   To enable the admin UI, set `admin.password` or `admin.passwordHash` in `data/local.json`.
 5. Start the server:
 
 ```bash
@@ -45,7 +45,7 @@ To print the application version without starting listeners:
 bun run src/index.js --version
 ```
 
-If `local.json`, `defaults.json`, or `users.json` is missing or unreadable, startup reports a direct configuration error that includes the expected path. By default the server checks `./local.json` first and then `/etc/postofficex/local.json`.
+If `local.json`, `defaults.json`, or `users.json` is missing or unreadable, startup reports a direct configuration error that includes the expected path. By default the server checks `./data/local.json` first and then `/etc/postofficex/local.json`.
 
 Or build a single Bun-targeted binary:
 
@@ -90,11 +90,11 @@ Important:
 
 PostOfficeX now reads three sibling files:
 
-- `defaults.json`: baseline server/runtime settings shared by most installs
-- `local.json`: hostname, domains, admin password, and any local overrides
-- `users.json`: mailbox users and addresses
+- `data/defaults.json`: baseline server/runtime settings shared by most installs
+- `data/local.json`: hostname, domains, admin password, and any local overrides
+- `data/users.json`: mailbox users and addresses
 
-`local.json.hostname` is the normal single place to set the mail hostname. It feeds SMTP greetings, message IDs, and outbound `EHLO` unless you set a narrower override such as `server.smtp.hostname` or `outbound.greetingHostname`.
+`data/local.json.hostname` is the normal single place to set the mail hostname. It feeds SMTP greetings, message IDs, and outbound `EHLO` unless you set a narrower override such as `server.smtp.hostname` or `outbound.greetingHostname`.
 
 One mailbox can have multiple recipient addresses through a single user entry. Put every address for that mailbox in the same user's `addresses` array.
 
@@ -162,7 +162,7 @@ Operationally, this means:
 
 ## Let's Encrypt
 
-The server reads its TLS material from the paths in `defaults.json` and `local.json`. The default baseline points to:
+The server reads its TLS material from the paths in `data/defaults.json` and `data/local.json`. The default baseline points to:
 
 ```json
 "tls": {
@@ -174,13 +174,7 @@ The server reads its TLS material from the paths in `defaults.json` and `local.j
 This repo now includes a Certbot flow that keeps those filenames stable while replacing the Cloudflare edge certs with real Let’s Encrypt certificates:
 
 1. Install `certbot` on the host.
-2. Start PostOfficeX with a PID file so the deploy hook can signal it:
-
-```bash
-POSTOFFICEX_PID_FILE=./postofficex.pid bun run src/index.js
-```
-
-3. Issue the certificate for your mail host:
+2. Issue the certificate for your mail host:
 
 ```bash
 ./scripts/install-letsencrypt.sh mail.postofficex.com admin@postofficex.com
@@ -190,17 +184,17 @@ If port `80` is already serving `/.well-known/acme-challenge/`, pass that webroo
 
 The Certbot deploy hook copies:
 
-- `fullchain.pem` to `certs/server.crt`
-- `privkey.pem` to `certs/server.key`
+- `fullchain.pem` to `data/certs/server.crt`
+- `privkey.pem` to `data/certs/server.key`
 
-After renewals, the hook sends `SIGHUP` to the running process through `postofficex.pid`, and PostOfficeX reloads the certificate from disk without a full restart.
+After renewals, the hook reloads `postofficex.service` with `SIGHUP`, and PostOfficeX reloads the certificate from disk without a full restart.
 
 ## systemd
 
 This repo also includes a `systemd` unit at `./postofficex.service`. It runs the server from the repo root with:
 
 ```bash
-POSTOFFICEX_PID_FILE=/root/postofficex/postofficex.pid
+ExecStart=/root/.bun/bin/bun run src/index.js
 ```
 
 Install and enable it with:

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { argsRequestVersion, formatStartupError, parseConfigPathArg, resolveConfigPath } from "../src/index.js";
@@ -16,7 +16,7 @@ describe("startup errors", () => {
 
   test("parses explicit config cli flags", () => {
     expect(parseConfigPathArg(["--config", "/etc/postofficex/local.json"])).toBe("/etc/postofficex/local.json");
-    expect(parseConfigPathArg(["-c", "./local.json"])).toBe("./local.json");
+    expect(parseConfigPathArg(["-c", "./data/local.json"])).toBe("./data/local.json");
     expect(parseConfigPathArg(["--help"])).toBe(null);
     expect(() => parseConfigPathArg(["--config"])).toThrow("Missing value for --config");
   });
@@ -25,14 +25,16 @@ describe("startup errors", () => {
     expect(await resolveConfigPath(["--config", "/srv/postofficex/local.json"])).toBe("/srv/postofficex/local.json");
   });
 
-  test("falls back to the working directory local.json when present", async () => {
+  test("falls back to the working directory data/local.json when present", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "postofficex-startup-"));
-    const localPath = join(rootDir, "local.json");
+    const configDir = join(rootDir, "data");
+    await mkdir(configDir, { recursive: true });
+    const localPath = join(configDir, "local.json");
     await writeFile(localPath, "{}", "utf8");
     const previousCwd = process.cwd();
     process.chdir(rootDir);
     try {
-      expect(await resolveConfigPath([])).toBe("./local.json");
+      expect(await resolveConfigPath([])).toBe("./data/local.json");
     } finally {
       process.chdir(previousCwd);
     }

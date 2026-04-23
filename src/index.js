@@ -1,13 +1,11 @@
-import { access, rm, writeFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { loadConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { PostOfficeServer } from "./server.js";
 import { MailboxStore } from "./storage.js";
 import { formatVersionLine } from "./version.js";
 
-const DEFAULT_CONFIG_PATHS = ["./local.json", "/etc/postofficex/local.json"];
-const pidFile = process.env.POSTOFFICEX_PID_FILE ?? "";
-
+const DEFAULT_CONFIG_PATHS = ["./data/local.json", "/etc/postofficex/local.json"];
 export function argsRequestVersion(argv = process.argv.slice(2)) {
   return argv.includes("--version") || argv.includes("-v");
 }
@@ -49,7 +47,7 @@ export function formatStartupError(error, resolvedConfigPath = DEFAULT_CONFIG_PA
   if (error && typeof error === "object") {
     if (error.code === "ENOENT") {
       const missingPath = error.path ?? resolvedConfigPath;
-      return `Configuration file not found at ${missingPath}. Ensure local.json, defaults.json, and users.json exist, or pass --config /path/to/local.json.`;
+      return `Configuration file not found at ${missingPath}. Ensure local.json, defaults.json, and users.json exist together in the same config directory, or pass --config /path/to/local.json.`;
     }
 
     if (error instanceof SyntaxError) {
@@ -79,9 +77,6 @@ async function main() {
   const store = new MailboxStore(config);
   const server = new PostOfficeServer(config, store, logger);
   await server.start();
-  if (pidFile) {
-    await writeFile(pidFile, `${process.pid}\n`, "utf8");
-  }
   let shuttingDown = false;
 
   const shutdown = async (signal) => {
@@ -92,9 +87,6 @@ async function main() {
     shuttingDown = true;
     logger.info("server.stopping", { signal });
     await server.stop();
-    if (pidFile) {
-      await rm(pidFile, { force: true });
-    }
     process.exit(0);
   };
 

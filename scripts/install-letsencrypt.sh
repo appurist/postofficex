@@ -42,5 +42,4 @@ else
     --deploy-hook "${DEPLOY_HOOK}"
 fi
 
-echo "Certificate installed into ${PROJECT_DIR}/certs."
-echo "Use POSTOFFICEX_PID_FILE=${PROJECT_DIR}/postofficex.pid when starting the server so renewals can trigger SIGHUP."
+echo "Certificate installed into ${PROJECT_DIR}/data/certs."

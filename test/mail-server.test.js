@@ -71,7 +71,7 @@ describe("PostOfficeX", () => {
     await readUntil(smtp, (text) => text.endsWith("\r\n"));
     smtp.end();
 
-    const mailboxDir = join(activeServer.rootDir, "data", "mailboxes", "alice", "meta");
+    const mailboxDir = join(activeServer.storageRootDir, "mailboxes", "alice", "meta");
     const files = Array.from(new Bun.Glob("*.json").scanSync({ cwd: mailboxDir, absolute: true }));
     expect(files.length).toBe(1);
     const metadata = JSON.parse(await readFile(files[0], "utf8"));
@@ -172,7 +172,7 @@ describe("PostOfficeX", () => {
     smtp.end();
 
     await writeFile(
-      join(activeServer.rootDir, "data", "mailboxes", "alice", "meta", "noise.json"),
+      join(activeServer.storageRootDir, "mailboxes", "alice", "meta", "noise.json"),
       JSON.stringify({ name: "INBOX", subscribed: true }, null, 2),
       "utf8"
     );

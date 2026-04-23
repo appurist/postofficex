@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import net from "node:net";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.js";
@@ -92,6 +92,8 @@ function createRemoteSmtpServer() {
 
 async function setupSubmissionServer({ resolveMx } = {}) {
   const rootDir = await mkdtemp(join(tmpdir(), "postofficex-submission-"));
+  const configDir = join(rootDir, "data");
+  await mkdir(configDir, { recursive: true });
   const userPasswordHash = await createPasswordHash("secret123");
   const smtpPort = await reservePort();
   const submissionPort = await reservePort();
@@ -164,9 +166,9 @@ async function setupSubmissionServer({ resolveMx } = {}) {
     ]
   };
 
-  const configPath = join(rootDir, "local.json");
+  const configPath = join(configDir, "local.json");
   await writeFile(
-    join(rootDir, "defaults.json"),
+    join(configDir, "defaults.json"),
     JSON.stringify(
       {
         server: config.server,
@@ -186,7 +188,7 @@ async function setupSubmissionServer({ resolveMx } = {}) {
     JSON.stringify({ hostname: config.server.smtp.hostname, domains: config.domains }, null, 2),
     "utf8"
   );
-  await writeFile(join(rootDir, "users.json"), JSON.stringify(config.users, null, 2), "utf8");
+  await writeFile(join(configDir, "users.json"), JSON.stringify(config.users, null, 2), "utf8");
   const resolved = await loadConfig(configPath);
   const server = new PostOfficeServer(resolved, new MailboxStore(resolved), undefined, {
     outbound: resolveMx ? { resolveMx } : undefined

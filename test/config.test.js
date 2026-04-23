@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../src/config.js";
@@ -11,9 +11,11 @@ async function writeJson(path, value) {
 describe("config", () => {
   test("loads defaults, local overrides, and preserves one mailbox with multiple addresses", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "postofficex-config-"));
-    const defaultsPath = join(rootDir, "defaults.json");
-    const localPath = join(rootDir, "local.json");
-    const usersPath = join(rootDir, "users.json");
+    const configDir = join(rootDir, "data");
+    await mkdir(configDir, { recursive: true });
+    const defaultsPath = join(configDir, "defaults.json");
+    const localPath = join(configDir, "local.json");
+    const usersPath = join(configDir, "users.json");
 
     await writeJson(defaultsPath, {
       server: {
@@ -54,9 +56,11 @@ describe("config", () => {
 
   test("allows a specific smtp hostname override while using the global hostname elsewhere", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "postofficex-config-"));
-    const defaultsPath = join(rootDir, "defaults.json");
-    const localPath = join(rootDir, "local.json");
-    const usersPath = join(rootDir, "users.json");
+    const configDir = join(rootDir, "data");
+    await mkdir(configDir, { recursive: true });
+    const defaultsPath = join(configDir, "defaults.json");
+    const localPath = join(configDir, "local.json");
+    const usersPath = join(configDir, "users.json");
 
     await writeJson(defaultsPath, {
       outbound: {
@@ -91,9 +95,11 @@ describe("config", () => {
 
   test("saves local overrides and users without rewriting defaults", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "postofficex-config-"));
-    const defaultsPath = join(rootDir, "defaults.json");
-    const localPath = join(rootDir, "local.json");
-    const usersPath = join(rootDir, "users.json");
+    const configDir = join(rootDir, "data");
+    await mkdir(configDir, { recursive: true });
+    const defaultsPath = join(configDir, "defaults.json");
+    const localPath = join(configDir, "local.json");
+    const usersPath = join(configDir, "users.json");
 
     await writeJson(defaultsPath, {
       server: {
@@ -173,8 +179,10 @@ describe("config", () => {
 
   test("fails clearly when local.json is used without defaults.json", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "postofficex-config-"));
-    const localPath = join(rootDir, "local.json");
-    const usersPath = join(rootDir, "users.json");
+    const configDir = join(rootDir, "data");
+    await mkdir(configDir, { recursive: true });
+    const localPath = join(configDir, "local.json");
+    const usersPath = join(configDir, "users.json");
 
     await writeJson(localPath, {
       hostname: "mail.example.test",
@@ -184,15 +192,17 @@ describe("config", () => {
 
     await expect(loadConfig(localPath)).rejects.toMatchObject({
       code: "ENOENT",
-      path: join(rootDir, "defaults.json")
+      path: join(configDir, "defaults.json")
     });
   });
 
   test("rejects duplicate addresses across users", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "postofficex-config-"));
-    const defaultsPath = join(rootDir, "defaults.json");
-    const localPath = join(rootDir, "local.json");
-    const usersPath = join(rootDir, "users.json");
+    const configDir = join(rootDir, "data");
+    await mkdir(configDir, { recursive: true });
+    const defaultsPath = join(configDir, "defaults.json");
+    const localPath = join(configDir, "local.json");
+    const usersPath = join(configDir, "users.json");
 
     await writeJson(defaultsPath, {});
     await writeJson(localPath, {

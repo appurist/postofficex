@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import https from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -47,6 +47,8 @@ async function setupAdminServer({
   log = undefined
 } = {}) {
   const rootDir = await mkdtemp(join(tmpdir(), "postofficex-admin-"));
+  const configDir = join(rootDir, "data");
+  await mkdir(configDir, { recursive: true });
   const userPasswordHash = await Bun.password.hash("secret123");
   const adminPasswordHash = plaintextAdminPassword ? "" : await Bun.password.hash("adminpw");
   const smtpPort = await reservePort();
@@ -97,8 +99,8 @@ async function setupAdminServer({
       preferStartTls: false
     },
     tls: {
-      certFile: join(process.cwd(), "certs", "server.crt"),
-      keyFile: join(process.cwd(), "certs", "server.key")
+      certFile: join(process.cwd(), "data", "certs", "server.crt"),
+      keyFile: join(process.cwd(), "data", "certs", "server.key")
     },
     limits: {
       maxMessageBytes: 1024 * 1024,
@@ -129,11 +131,11 @@ async function setupAdminServer({
     ]
   };
 
-  const configPath = join(rootDir, "local.json");
+  const configPath = join(configDir, "local.json");
   const configPaths = {
-    defaults: join(rootDir, "defaults.json"),
+    defaults: join(configDir, "defaults.json"),
     local: configPath,
-    users: join(rootDir, "users.json")
+    users: join(configDir, "users.json")
   };
   await writeFile(
     configPaths.defaults,

@@ -1,6 +1,6 @@
 import net from "node:net";
 import tls from "node:tls";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect } from "bun:test";
@@ -87,6 +87,8 @@ export async function reservePort() {
 
 export async function setupServer() {
   const rootDir = await mkdtemp(join(tmpdir(), "postofficex-"));
+  const configDir = join(rootDir, "data");
+  await mkdir(configDir, { recursive: true });
   const passwordHash = await createPasswordHash("secret123");
   const smtpPort = await reservePort();
   const submissionPort = await reservePort();
@@ -135,8 +137,8 @@ export async function setupServer() {
       preferStartTls: false
     },
     tls: {
-      certFile: join(process.cwd(), "certs", "server.crt"),
-      keyFile: join(process.cwd(), "certs", "server.key")
+      certFile: join(process.cwd(), "data", "certs", "server.crt"),
+      keyFile: join(process.cwd(), "data", "certs", "server.key")
     },
     limits: {
       maxMessageBytes: 1024 * 1024,
@@ -159,9 +161,9 @@ export async function setupServer() {
     ]
   };
 
-  const configPath = join(rootDir, "local.json");
+  const configPath = join(configDir, "local.json");
   await writeFile(
-    join(rootDir, "defaults.json"),
+    join(configDir, "defaults.json"),
     JSON.stringify(
       {
         server: config.server,
@@ -188,7 +190,7 @@ export async function setupServer() {
     ),
     "utf8"
   );
-  await writeFile(join(rootDir, "users.json"), JSON.stringify(config.users, null, 2), "utf8");
+  await writeFile(join(configDir, "users.json"), JSON.stringify(config.users, null, 2), "utf8");
   const resolved = await loadConfig(configPath);
   const server = new PostOfficeServer(resolved, new MailboxStore(resolved));
   await server.start();
@@ -196,6 +198,7 @@ export async function setupServer() {
     server,
     configPath,
     rootDir,
+    storageRootDir: resolved.storage.rootDir,
     smtpPort,
     submissionPort,
     submissionTlsPort,
