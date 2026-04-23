@@ -73,6 +73,7 @@ function isAdminAuthenticatedRoute(pathname, method) {
     (pathname === "/" && method === "GET") ||
     (pathname === "/logout" && method === "POST") ||
     (pathname === "/config/global" && method === "POST") ||
+    (pathname === "/config/domains" && method === "POST") ||
     (pathname === "/users/save" && method === "POST") ||
     (pathname === "/users/delete" && method === "POST")
   );
@@ -116,7 +117,7 @@ function renderLayout(title, body, flash = "") {
       --soft: #efe6d8;
     }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: linear-gradient(180deg, #efe5d7 0%, var(--bg) 100%); color: var(--ink); }
+    body { margin: 0; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; background: linear-gradient(180deg, #efe5d7 0%, var(--bg) 100%); color: var(--ink); }
     .wrap { max-width: 1120px; margin: 0 auto; padding: 32px 20px 64px; }
     h1, h2, h3 { margin: 0 0 12px; font-weight: 600; }
     p { color: var(--muted); }
@@ -129,7 +130,18 @@ function renderLayout(title, body, flash = "") {
     .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
     .inline { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
     .inline input { width: auto; }
+    .toggle-grid { display: grid; gap: 5px 18px; margin-top: 14px; margin-bottom: 18px; }
+    .toggle-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: center; }
+    .toggle-label { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+    .toggle-cell { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+    .toggle-cell input { width: auto; margin: 0; }
+    .toggle-cell.disabled { color: #9a9389; }
+    @media (max-width: 780px) {
+      .toggle-row { grid-template-columns: 1fr; gap: 6px; }
+      .toggle-label { margin-bottom: 2px; }
+    }
     .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    .actions.right { justify-content: flex-end; }
     button { border: 0; border-radius: 999px; padding: 10px 16px; font: inherit; background: var(--accent); color: white; cursor: pointer; }
     button.secondary { background: #4b5d67; }
     button.subtle { background: #8a877f; }
@@ -137,6 +149,16 @@ function renderLayout(title, body, flash = "") {
     .user { border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: var(--soft); }
     .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
     .mono { font-family: "Courier New", monospace; }
+    .section-heading { margin-bottom: 8px; }
+    .section-heading.spacious { margin-top: 18px; }
+    .tabbar { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 0; }
+    .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 0 14px; align-items: end; }
+    .tab-button { background: transparent; color: var(--muted); border: 1px solid var(--line); border-bottom: 0; border-radius: 14px 14px 0 0; padding-bottom: 12px; }
+    .tab-button.active { background: var(--panel); color: var(--accent); border-color: var(--line); position: relative; top: 1px; }
+    .logout-form { margin: 0 12px 6px 0; }
+    .logout-button { border-radius: 999px; height: 32px; padding-top: 0; padding-bottom: 0; display: inline-flex; align-items: center; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
   </style>
 </head>
 <body>
@@ -144,6 +166,23 @@ function renderLayout(title, body, flash = "") {
     ${flash ? `<div class="flash">${escapeHtml(flash)}</div>` : ""}
     ${body}
   </div>
+  <script>
+    (() => {
+      const buttons = Array.from(document.querySelectorAll("[data-tab-button]"));
+      const panels = Array.from(document.querySelectorAll("[data-tab-panel]"));
+      if (buttons.length === 0 || panels.length === 0) {
+        return;
+      }
+      const activate = (name) => {
+        buttons.forEach((button) => button.classList.toggle("active", button.dataset.tabButton === name));
+        panels.forEach((panel) => panel.classList.toggle("active", panel.dataset.tabPanel === name));
+      };
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => activate(button.dataset.tabButton));
+      });
+      activate(buttons[0].dataset.tabButton);
+    })();
+  </script>
 </body>
 </html>`;
 }
@@ -153,13 +192,13 @@ function renderLoginPage(flash = "") {
     `${APP_DISPLAY_NAME} Admin`,
     `<div class="card" style="max-width: 420px; margin: 80px auto 0;">
       <h1>${APP_DISPLAY_NAME} Admin</h1>
-      <p>Sign in to manage global server settings and mail users.</p>
+      <p>Login to manage global server settings and mail users.</p>
       <p>Version ${escapeHtml(APP_VERSION)}</p>
       <form method="post" action="/login">
         <label for="password">Admin password</label>
         <input id="password" name="password" type="password" required>
-        <div class="actions">
-          <button type="submit">Sign in</button>
+        <div class="actions right">
+          <button type="submit">Login</button>
         </div>
       </form>
     </div>`,
@@ -214,17 +253,32 @@ function renderAdminPage(config, flash = "") {
       : `<span class="mono">${escapeHtml(config.configPath)}</span>`;
   const smtpHostnameOverride = config.local?.server?.smtp?.hostname ?? "";
   const outboundGreetingHostnameOverride = config.local?.outbound?.greetingHostname ?? "";
+  const tabs = `<div class="tabs">
+      <button class="tab-button" type="button" data-tab-button="global">Global</button>
+      <button class="tab-button" type="button" data-tab-button="domains">Domains</button>
+      <button class="tab-button" type="button" data-tab-button="users">Users</button>
+      <button class="tab-button" type="button" data-tab-button="about">About</button>
+    </div>`;
   const body = `<div class="topbar">
       <div>
         <h1>${APP_DISPLAY_NAME} Admin</h1>
-        <p>Version ${escapeHtml(APP_VERSION)}. Admin UI changes are written back to ${sourceSummary}.<br>Listener host, port, and TLS material changes may require a restart.</p>
       </div>
-      <form method="post" action="/logout">
-        <button class="secondary" type="submit">Log out</button>
+    </div>
+    <div class="tabbar">
+      ${tabs}
+      <form class="logout-form" method="post" action="/logout">
+        <button class="secondary logout-button" type="submit">Logout</button>
       </form>
     </div>
-    <div class="grid">
-      <section class="card">
+    <section class="tab-panel active" data-tab-panel="about">
+      <div class="card">
+        <h2>About</h2>
+        <p>Version ${escapeHtml(APP_VERSION)}</p>
+        <p>Admin UI changes are written back to ${sourceSummary}. Listener host, port, and TLS material changes may require a restart.</p>
+      </div>
+    </section>
+    <section class="tab-panel" data-tab-panel="global">
+      <div class="card">
         <h2>Global Settings</h2>
         <form method="post" action="/config/global">
           <div class="row">
@@ -257,20 +311,6 @@ function renderAdminPage(config, flash = "") {
           </div>
           <div class="row">
             <div>
-              <label>Submission host</label>
-              <input name="submissionHost" value="${escapeHtml(config.server.submission.host)}" required>
-            </div>
-            <div>
-              <label>Submission port</label>
-              <input name="submissionPort" type="number" value="${escapeHtml(config.server.submission.port)}" required>
-            </div>
-            <div>
-              <label>Submission TLS port</label>
-              <input name="submissionTlsPort" type="number" value="${escapeHtml(config.server.submission.tlsPort)}" required>
-            </div>
-          </div>
-          <div class="row">
-            <div>
               <label>IMAP host</label>
               <input name="imapHost" value="${escapeHtml(config.server.imap.host)}" required>
             </div>
@@ -283,20 +323,49 @@ function renderAdminPage(config, flash = "") {
               <input name="imapTlsPort" type="number" value="${escapeHtml(config.server.imap.tlsPort)}" required>
             </div>
           </div>
+          <div class="row">
+            <div>
+              <label>SMTP host</label>
+              <input name="submissionHost" value="${escapeHtml(config.server.submission.host)}" required>
+            </div>
+            <div>
+              <label>SMTP port</label>
+              <input name="submissionPort" type="number" value="${escapeHtml(config.server.submission.port)}" required>
+            </div>
+            <div>
+              <label>SMTPS port</label>
+              <input name="submissionTlsPort" type="number" value="${escapeHtml(config.server.submission.tlsPort)}" required>
+            </div>
+          </div>
           <label>SMTP hostname override</label>
           <input name="smtpHostnameOverride" value="${escapeHtml(smtpHostnameOverride)}" placeholder="Leave blank to use the global mail hostname">
-          <div class="inline"><input name="smtpAllowPlaintext" type="checkbox" ${config.server.smtp.allowPlaintext ? "checked" : ""}><span>Allow plaintext SMTP</span></div>
-          <div class="inline"><input name="smtpEnableStartTls" type="checkbox" ${config.server.smtp.enableStartTls ? "checked" : ""}><span>Enable SMTP STARTTLS</span></div>
-          <div class="inline"><input name="submissionAllowPlaintext" type="checkbox" ${config.server.submission.allowPlaintext ? "checked" : ""}><span>Allow plaintext authenticated submission</span></div>
-          <div class="inline"><input name="submissionEnableStartTls" type="checkbox" ${config.server.submission.enableStartTls ? "checked" : ""}><span>Enable submission STARTTLS</span></div>
-          <div class="inline"><input name="submissionEnableTls" type="checkbox" ${config.server.submission.enableTls ? "checked" : ""}><span>Enable implicit TLS submission</span></div>
-          <div class="inline"><input name="pop3AllowPlaintext" type="checkbox" ${config.server.pop3.allowPlaintext ? "checked" : ""}><span>Allow plaintext POP3 login</span></div>
-          <div class="inline"><input name="pop3EnableStartTls" type="checkbox" ${config.server.pop3.enableStartTls ? "checked" : ""}><span>Enable POP3 STLS</span></div>
-          <div class="inline"><input name="pop3EnableTls" type="checkbox" ${config.server.pop3.enableTls ? "checked" : ""}><span>Enable implicit TLS POP3</span></div>
-          <div class="inline"><input name="imapAllowPlaintext" type="checkbox" ${config.server.imap.allowPlaintext ? "checked" : ""}><span>Allow plaintext IMAP login</span></div>
-          <div class="inline"><input name="imapEnableStartTls" type="checkbox" ${config.server.imap.enableStartTls ? "checked" : ""}><span>Enable IMAP STARTTLS</span></div>
-          <div class="inline"><input name="imapEnableTls" type="checkbox" ${config.server.imap.enableTls ? "checked" : ""}><span>Enable implicit TLS IMAP</span></div>
-          <h3>Outbound Delivery</h3>
+          <div class="toggle-grid">
+            <div class="toggle-row">
+              <div class="toggle-label">POP3</div>
+              <label class="toggle-cell"><input name="pop3AllowPlaintext" type="checkbox" ${config.server.pop3.allowPlaintext ? "checked" : ""}><span>Allow plaintext login</span></label>
+              <label class="toggle-cell disabled"><input name="pop3EnableStartTls" type="checkbox" ${config.server.pop3.enableStartTls ? "checked" : ""} disabled><span>Enable STLS</span></label>
+              <label class="toggle-cell"><input name="pop3EnableTls" type="checkbox" ${config.server.pop3.enableTls ? "checked" : ""}><span>Enable implicit TLS</span></label>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-label">IMAP</div>
+              <label class="toggle-cell"><input name="imapAllowPlaintext" type="checkbox" ${config.server.imap.allowPlaintext ? "checked" : ""}><span>Allow plaintext login</span></label>
+              <label class="toggle-cell disabled"><input name="imapEnableStartTls" type="checkbox" ${config.server.imap.enableStartTls ? "checked" : ""} disabled><span>Enable STARTTLS</span></label>
+              <label class="toggle-cell"><input name="imapEnableTls" type="checkbox" ${config.server.imap.enableTls ? "checked" : ""}><span>Enable implicit TLS</span></label>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-label">SMTP</div>
+              <label class="toggle-cell"><input name="smtpAllowPlaintext" type="checkbox" ${config.server.smtp.allowPlaintext ? "checked" : ""}><span>Allow plaintext inbound</span></label>
+              <label class="toggle-cell disabled"><input name="smtpEnableStartTls" type="checkbox" ${config.server.smtp.enableStartTls ? "checked" : ""} disabled><span>Enable STARTTLS</span></label>
+              <div class="toggle-cell"></div>
+            </div>
+            <div class="toggle-row">
+              <div class="toggle-label">SMTPS</div>
+              <label class="toggle-cell"><input name="submissionAllowPlaintext" type="checkbox" ${config.server.submission.allowPlaintext ? "checked" : ""}><span>Allow plaintext auth</span></label>
+              <label class="toggle-cell disabled"><input name="submissionEnableStartTls" type="checkbox" ${config.server.submission.enableStartTls ? "checked" : ""} disabled><span>Enable STARTTLS</span></label>
+              <label class="toggle-cell"><input name="submissionEnableTls" type="checkbox" ${config.server.submission.enableTls ? "checked" : ""}><span>Enable implicit TLS</span></label>
+            </div>
+          </div>
+          <h3 class="section-heading">Outbound Delivery</h3>
           <div class="row">
             <div>
               <label>Outbound EHLO hostname override</label>
@@ -338,9 +407,7 @@ function renderAdminPage(config, flash = "") {
           </div>
           <label>Storage root</label>
           <input name="storageRootDir" value="${escapeHtml(config.storage.rootDir)}" required>
-          <label>Hosted domains</label>
-          <textarea name="domains" required>${escapeHtml(config.domains.join("\n"))}</textarea>
-          <h3>Admin UI</h3>
+          <h3 class="section-heading spacious">Admin UI</h3>
           <div class="row">
             <div>
               <label>Admin host</label>
@@ -359,15 +426,31 @@ function renderAdminPage(config, flash = "") {
             <button type="submit">Save global settings</button>
           </div>
         </form>
-      </section>
-      <section class="card">
+      </div>
+    </section>
+    <section class="tab-panel" data-tab-panel="domains">
+      <div class="card">
+        <h2>Domains</h2>
+        <p>These are the local domains this server accepts mail for.</p>
+        <form method="post" action="/config/domains">
+          <label>Hosted domains</label>
+          <textarea name="domains" required>${escapeHtml(config.domains.join("\n"))}</textarea>
+          <div class="actions">
+            <button type="submit">Save domains</button>
+          </div>
+        </form>
+      </div>
+    </section>
+    <section class="tab-panel" data-tab-panel="users">
+      <div class="grid">
+        <section class="card">
         <h2>Users</h2>
         <p>Each user can own one mailbox and multiple recipient addresses.</p>
         <div class="users">
           ${usersHtml}
         </div>
-      </section>
-      <section class="card">
+        </section>
+        <section class="card">
         <h2>Add User</h2>
         <form method="post" action="/users/save">
           <div class="row">
@@ -396,8 +479,9 @@ function renderAdminPage(config, flash = "") {
             <button type="submit">Create user</button>
           </div>
         </form>
-      </section>
-    </div>`;
+        </section>
+      </div>
+    </section>`;
 
   return renderLayout(`${APP_DISPLAY_NAME} Admin`, body, flash);
 }
@@ -731,7 +815,7 @@ export class AdminUiServer {
         storage: {
           rootDir: form.get("storageRootDir")?.trim() || this.config.storage.rootDir
         },
-        domains: parseDomains(form.get("domains") ?? ""),
+        domains: this.config.domains,
         admin: {
           host: form.get("adminHost")?.trim() || this.config.admin.host,
           port: numberFromForm(form, "adminPort", this.config.admin.port),
@@ -751,6 +835,19 @@ export class AdminUiServer {
       await saveConfig(nextConfig);
       this.onConfigUpdated(nextConfig);
       this.setFlashCookie(response, "Global settings saved. Listener host, port, and TLS changes may require a restart.");
+      redirect(response, "/");
+      return;
+    }
+
+    if (url.pathname === "/config/domains" && method === "POST") {
+      const form = await this.readForm(request);
+      const nextConfig = {
+        ...this.config,
+        domains: parseDomains(form.get("domains") ?? "")
+      };
+      await saveConfig(nextConfig);
+      this.onConfigUpdated(nextConfig);
+      this.setFlashCookie(response, "Domains saved.");
       redirect(response, "/");
       return;
     }

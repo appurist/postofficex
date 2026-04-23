@@ -320,11 +320,22 @@ describe("admin ui", () => {
         socketTimeoutMs: "45000",
         maxInvalidAuthAttempts: "4",
         storageRootDir: "./data",
-        domains: "example.test\nexample.net",
         adminHost: "127.0.0.1",
         adminPort: String(activeServer.adminPort),
         adminEnableTls: "on",
         adminLogRequests: "on"
+      }).toString()
+    });
+
+    await fetch(`http://127.0.0.1:${activeServer.adminPort}/config/domains`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: cookie
+      },
+      redirect: "manual",
+      body: new URLSearchParams({
+        domains: "example.test\nexample.net"
       }).toString()
     });
 
@@ -424,11 +435,22 @@ describe("admin ui", () => {
         socketTimeoutMs: "45000",
         maxInvalidAuthAttempts: "4",
         storageRootDir: "./data",
-        domains: "example.test\nexample.net",
         adminHost: "127.0.0.1",
         adminPort: String(activeServer.adminPort),
         adminEnableTls: "on",
         adminLogRequests: "on"
+      }).toString()
+    });
+
+    await fetch(`http://127.0.0.1:${activeServer.adminPort}/config/domains`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: cookie
+      },
+      redirect: "manual",
+      body: new URLSearchParams({
+        domains: "example.test\nexample.net"
       }).toString()
     });
 
