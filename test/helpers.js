@@ -1,4 +1,5 @@
 import net from "node:net";
+import tls from "node:tls";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +32,8 @@ export async function setupServer() {
   const submissionTlsPort = await reservePort();
   const pop3Port = await reservePort();
   const pop3TlsPort = await reservePort();
+  const imapPort = await reservePort();
+  const imapTlsPort = await reservePort();
   const config = {
     server: {
       smtp: {
@@ -53,7 +56,16 @@ export async function setupServer() {
         port: pop3Port,
         tlsPort: pop3TlsPort,
         allowPlaintext: true,
+        enableStartTls: false,
         enableTls: false
+      },
+      imap: {
+        host: "127.0.0.1",
+        port: imapPort,
+        tlsPort: imapTlsPort,
+        allowPlaintext: false,
+        enableStartTls: false,
+        enableTls: true
       }
     },
     outbound: {
@@ -62,8 +74,8 @@ export async function setupServer() {
       preferStartTls: false
     },
     tls: {
-      certFile: "./missing.crt",
-      keyFile: "./missing.key"
+      certFile: join(process.cwd(), "certs", "server.crt"),
+      keyFile: join(process.cwd(), "certs", "server.key")
     },
     limits: {
       maxMessageBytes: 1024 * 1024,
@@ -99,13 +111,22 @@ export async function setupServer() {
     submissionPort,
     submissionTlsPort,
     pop3Port,
-    pop3TlsPort
+    pop3TlsPort,
+    imapPort,
+    imapTlsPort
   };
 }
 
 export function connect(port) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ host: "127.0.0.1", port }, () => resolve(socket));
+    socket.once("error", reject);
+  });
+}
+
+export function connectTls(port) {
+  return new Promise((resolve, reject) => {
+    const socket = tls.connect({ host: "127.0.0.1", port, rejectUnauthorized: false }, () => resolve(socket));
     socket.once("error", reject);
   });
 }
@@ -137,6 +158,11 @@ export async function pop3Command(socket, command, multiline = false) {
     return await readUntil(socket, (text) => text.endsWith("\r\n"));
   }
   return await readUntil(socket, (text) => text.endsWith("\r\n.\r\n"));
+}
+
+export async function imapCommand(socket, command, predicate = (text) => text.endsWith("\r\n")) {
+  socket.write(command);
+  return await readUntil(socket, predicate);
 }
 
 export function expectOk(response) {

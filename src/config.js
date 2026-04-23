@@ -42,6 +42,14 @@ export async function loadConfig(configPath) {
         allowPlaintext: parsed.server?.pop3?.allowPlaintext ?? false,
         enableStartTls: parsed.server?.pop3?.enableStartTls ?? false,
         enableTls: parsed.server?.pop3?.enableTls ?? true
+      },
+      imap: {
+        host: parsed.server?.imap?.host ?? "0.0.0.0",
+        port: parsed.server?.imap?.port ?? 143,
+        tlsPort: parsed.server?.imap?.tlsPort ?? 993,
+        allowPlaintext: parsed.server?.imap?.allowPlaintext ?? false,
+        enableStartTls: parsed.server?.imap?.enableStartTls ?? false,
+        enableTls: parsed.server?.imap?.enableTls ?? true
       }
     },
     outbound: {

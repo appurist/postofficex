@@ -98,6 +98,8 @@ async function setupSubmissionServer({ resolveMx } = {}) {
   const submissionTlsPort = await reservePort();
   const pop3Port = await reservePort();
   const pop3TlsPort = await reservePort();
+  const imapPort = await reservePort();
+  const imapTlsPort = await reservePort();
   const config = {
     server: {
       smtp: {
@@ -120,6 +122,15 @@ async function setupSubmissionServer({ resolveMx } = {}) {
         port: pop3Port,
         tlsPort: pop3TlsPort,
         allowPlaintext: true,
+        enableStartTls: false,
+        enableTls: false
+      },
+      imap: {
+        host: "127.0.0.1",
+        port: imapPort,
+        tlsPort: imapTlsPort,
+        allowPlaintext: false,
+        enableStartTls: false,
         enableTls: false
       }
     },

@@ -22,6 +22,14 @@
       "allowPlaintext": false,
       "enableStartTls": false,
       "enableTls": true
+    },
+    "imap": {
+      "host": "0.0.0.0",
+      "port": 143,
+      "tlsPort": 993,
+      "allowPlaintext": false,
+      "enableStartTls": false,
+      "enableTls": true
     }
   },
   "outbound": {

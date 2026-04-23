@@ -4,8 +4,9 @@ import net from "node:net";
 import tls from "node:tls";
 import { join } from "node:path";
 import { AdminUiServer } from "./admin.js";
-import { verifyPassword } from "./auth.js";
+import { authenticateUser, normalizeLoginIdentifier } from "./accounts.js";
 import { buildUserDirectory } from "./config.js";
+import { ImapConnectionHandler } from "./imap.js";
 import { logger } from "./logger.js";
 import { OutboundSmtpRelay } from "./outbound.js";
 import { endStream, ensureDirectory, ensureTrailingCrlf, generateMessageId, stripSmtpPath, writeToStream } from "./util.js";
@@ -21,16 +22,6 @@ function decodeBase64Utf8(value) {
 function isMailboxAddress(address) {
   const [localPart, domain] = address.split("@");
   return Boolean(localPart && domain);
-}
-
-function normalizeLoginIdentifier(value) {
-  const normalized = value.trim().toLowerCase();
-  const parts = normalized.split("@");
-  if (parts.length === 3 && parts[1] === parts[2]) {
-    return `${parts[0]}@${parts[1]}`;
-  }
-
-  return normalized;
 }
 
 function canWriteToSocket(socket) {
@@ -75,15 +66,20 @@ export class PostOfficeServer {
     this.submissionTlsServer = undefined;
     this.pop3Server = undefined;
     this.pop3TlsServer = undefined;
+    this.imapServer = undefined;
+    this.imapTlsServer = undefined;
     this.adminServer = undefined;
     this.tlsMaterial = undefined;
     this.outboundRelay = deps.outboundRelay ?? new OutboundSmtpRelay(config, log, deps.outbound);
+    this.imapHandler = new ImapConnectionHandler(config, store, this.users, log);
     this.socketGroups = {
       smtp: new Set(),
       submission: new Set(),
       submissionTls: new Set(),
       pop3: new Set(),
-      pop3Tls: new Set()
+      pop3Tls: new Set(),
+      imap: new Set(),
+      imapTls: new Set()
     };
     this.stopping = false;
   }
@@ -94,6 +90,8 @@ export class PostOfficeServer {
         config.server.submission.enableStartTls ||
         config.server.submission.enableTls ||
         config.server.pop3.enableTls ||
+        config.server.imap.enableStartTls ||
+        config.server.imap.enableTls ||
         config.admin?.enableTls
     );
   }
@@ -125,12 +123,22 @@ export class PostOfficeServer {
       this.trackSocket(this.socketGroups.pop3, socket);
       this.handlePop3(socket, false, false);
     });
+    if (this.config.server.imap.allowPlaintext || this.config.server.imap.enableStartTls) {
+      this.imapServer = net.createServer((socket) => {
+        this.trackSocket(this.socketGroups.imap, socket);
+        this.imapHandler.handle(socket, false);
+      });
+    }
 
-    await Promise.all([
+    const listeners = [
       this.listen(this.smtpServer, this.config.server.smtp.port, this.config.server.smtp.host),
       this.listen(this.submissionServer, this.config.server.submission.port, this.config.server.submission.host),
       this.listen(this.pop3Server, this.config.server.pop3.port, this.config.server.pop3.host)
-    ]);
+    ];
+    if (this.imapServer) {
+      listeners.push(this.listen(this.imapServer, this.config.server.imap.port, this.config.server.imap.host));
+    }
+    await Promise.all(listeners);
 
     if (this.config.server.submission.enableTls) {
       if (!this.tlsMaterial) {
@@ -174,6 +182,25 @@ export class PostOfficeServer {
       await this.listen(this.pop3TlsServer, this.config.server.pop3.tlsPort, this.config.server.pop3.host);
     }
 
+    if (this.config.server.imap.enableTls) {
+      if (!this.tlsMaterial) {
+        throw new Error("IMAP TLS is enabled but TLS material is unavailable");
+      }
+
+      this.imapTlsServer = tls.createServer(
+        {
+          cert: this.tlsMaterial.cert,
+          key: this.tlsMaterial.key
+        },
+        (socket) => {
+          this.trackSocket(this.socketGroups.imapTls, socket);
+          this.imapHandler.handle(socket, true);
+        }
+      );
+
+      await this.listen(this.imapTlsServer, this.config.server.imap.tlsPort, this.config.server.imap.host);
+    }
+
     this.adminServer = new AdminUiServer(
       this.config,
       (nextConfig) => this.applyConfig(nextConfig),
@@ -188,6 +215,8 @@ export class PostOfficeServer {
       submissionTlsPort: this.config.server.submission.enableTls ? this.config.server.submission.tlsPort : null,
       pop3Port: this.config.server.pop3.port,
       pop3TlsPort: this.config.server.pop3.enableTls ? this.config.server.pop3.tlsPort : null,
+      imapPort: this.imapServer ? this.config.server.imap.port : null,
+      imapTlsPort: this.config.server.imap.enableTls ? this.config.server.imap.tlsPort : null,
       adminPort: this.adminServer.enabled ? this.config.admin.port : null
     });
   }
@@ -209,6 +238,10 @@ export class PostOfficeServer {
       this.pop3TlsServer.setSecureContext(nextTlsMaterial);
     }
 
+    if (this.imapTlsServer?.setSecureContext) {
+      this.imapTlsServer.setSecureContext(nextTlsMaterial);
+    }
+
     this.adminServer?.updateTlsMaterial(nextTlsMaterial);
     return true;
   }
@@ -227,6 +260,8 @@ export class PostOfficeServer {
       this.closeServer(this.submissionTlsServer),
       this.closeServer(this.pop3Server),
       this.closeServer(this.pop3TlsServer),
+      this.closeServer(this.imapServer),
+      this.closeServer(this.imapTlsServer),
       this.adminServer?.stop()
     ]);
   }
@@ -235,6 +270,7 @@ export class PostOfficeServer {
     this.config = nextConfig;
     this.store.config = nextConfig;
     this.users = buildUserDirectory(nextConfig);
+    this.imapHandler = new ImapConnectionHandler(nextConfig, this.store, this.users, this.log);
     this.outboundRelay.updateConfig(nextConfig);
     this.adminServer?.updateConfig(nextConfig);
   }
@@ -332,10 +368,7 @@ export class PostOfficeServer {
   }
 
   async authenticateSubmissionUser(username, password) {
-    const normalized = normalizeLoginIdentifier(username);
-    const user = this.users.usersByUsername.get(normalized) ?? this.users.usersByAddress.get(normalized);
-    const valid = user ? await verifyPassword(password, user.passwordHash) : false;
-    return valid ? user : null;
+    return await authenticateUser(this.users, username, password);
   }
 
   submissionSenderAllowed(user, address) {
@@ -905,10 +938,8 @@ export class PostOfficeServer {
               return;
             }
             {
-              const user =
-                this.users.usersByUsername.get(state.username) ?? this.users.usersByAddress.get(state.username);
-              const valid = user ? await verifyPassword(argument, user.passwordHash) : false;
-              if (!valid || !user) {
+              const user = await authenticateUser(this.users, state.username, argument);
+              if (!user) {
                 state.authFailures += 1;
                 if (state.authFailures >= this.config.limits.maxInvalidAuthAttempts) {
                   write("-ERR too many auth failures\r\n");

@@ -257,6 +257,20 @@ function renderAdminPage(config, flash = "") {
               <input name="submissionTlsPort" type="number" value="${escapeHtml(config.server.submission.tlsPort)}" required>
             </div>
           </div>
+          <div class="row">
+            <div>
+              <label>IMAP host</label>
+              <input name="imapHost" value="${escapeHtml(config.server.imap.host)}" required>
+            </div>
+            <div>
+              <label>IMAP port</label>
+              <input name="imapPort" type="number" value="${escapeHtml(config.server.imap.port)}" required>
+            </div>
+            <div>
+              <label>IMAP TLS port</label>
+              <input name="imapTlsPort" type="number" value="${escapeHtml(config.server.imap.tlsPort)}" required>
+            </div>
+          </div>
           <label>SMTP hostname</label>
           <input name="smtpHostname" value="${escapeHtml(config.server.smtp.hostname)}" required>
           <div class="inline"><input name="smtpAllowPlaintext" type="checkbox" ${config.server.smtp.allowPlaintext ? "checked" : ""}><span>Allow plaintext SMTP</span></div>
@@ -267,6 +281,9 @@ function renderAdminPage(config, flash = "") {
           <div class="inline"><input name="pop3AllowPlaintext" type="checkbox" ${config.server.pop3.allowPlaintext ? "checked" : ""}><span>Allow plaintext POP3 login</span></div>
           <div class="inline"><input name="pop3EnableStartTls" type="checkbox" ${config.server.pop3.enableStartTls ? "checked" : ""}><span>Enable POP3 STLS</span></div>
           <div class="inline"><input name="pop3EnableTls" type="checkbox" ${config.server.pop3.enableTls ? "checked" : ""}><span>Enable implicit TLS POP3</span></div>
+          <div class="inline"><input name="imapAllowPlaintext" type="checkbox" ${config.server.imap.allowPlaintext ? "checked" : ""}><span>Allow plaintext IMAP login</span></div>
+          <div class="inline"><input name="imapEnableStartTls" type="checkbox" ${config.server.imap.enableStartTls ? "checked" : ""}><span>Enable IMAP STARTTLS</span></div>
+          <div class="inline"><input name="imapEnableTls" type="checkbox" ${config.server.imap.enableTls ? "checked" : ""}><span>Enable implicit TLS IMAP</span></div>
           <h3>Outbound Delivery</h3>
           <div class="row">
             <div>
@@ -636,6 +653,14 @@ export class AdminUiServer {
             allowPlaintext: boolFromForm(form, "pop3AllowPlaintext"),
             enableStartTls: boolFromForm(form, "pop3EnableStartTls"),
             enableTls: boolFromForm(form, "pop3EnableTls")
+          },
+          imap: {
+            host: form.get("imapHost")?.trim() || this.config.server.imap.host,
+            port: numberFromForm(form, "imapPort", this.config.server.imap.port),
+            tlsPort: numberFromForm(form, "imapTlsPort", this.config.server.imap.tlsPort),
+            allowPlaintext: boolFromForm(form, "imapAllowPlaintext"),
+            enableStartTls: boolFromForm(form, "imapEnableStartTls"),
+            enableTls: boolFromForm(form, "imapEnableTls")
           }
         },
         outbound: {

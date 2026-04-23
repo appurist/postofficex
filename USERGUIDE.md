@@ -48,6 +48,14 @@ If the config file is missing or invalid, startup fails with a configuration err
       "allowPlaintext": false,
       "enableStartTls": false,
       "enableTls": true
+    },
+    "imap": {
+      "host": "0.0.0.0",
+      "port": 143,
+      "tlsPort": 993,
+      "allowPlaintext": false,
+      "enableStartTls": false,
+      "enableTls": true
     }
   },
   "outbound": {
@@ -121,6 +129,25 @@ If the config file is missing or invalid, startup fails with a configuration err
 - `enableTls`: Enables the implicit TLS POP3 listener on `tlsPort`.
   - If either TLS option is enabled, `tls.certFile` and `tls.keyFile` must exist and be readable.
 
+### `server.imap`
+
+- `host`: IP address to bind the IMAP listener to.
+- `port`: Plain IMAP port.
+  - Use `143` for standard IMAP.
+- `tlsPort`: Implicit TLS IMAP port.
+  - Use `993` for standard IMAP-over-TLS.
+- `allowPlaintext`: Controls whether `LOGIN` is allowed before TLS on the plain IMAP port.
+- `enableStartTls`: Reserved for IMAP `STARTTLS` support on the plain port.
+- `enableTls`: Enables the implicit TLS IMAP listener on `tlsPort`.
+  - If enabled, `tls.certFile` and `tls.keyFile` must exist and be readable.
+
+Phase 1 IMAP support is aimed at practical desktop-client compatibility:
+
+- folder hierarchy with always-present `INBOX`
+- `LIST`, `LSUB`, `SELECT`, `EXAMINE`, `CREATE`, `DELETE`, `RENAME`
+- `STATUS`, `FETCH`, `UID FETCH`, `STORE`, `UID STORE`, `SEARCH`, `UID SEARCH`
+- `COPY`, `UID COPY`, `APPEND`, `EXPUNGE`, `CLOSE`, `IDLE`
+
 ### `server.submission`
 
 `server.submission` controls authenticated SMTP client submission.
@@ -135,13 +162,13 @@ If the config file is missing or invalid, startup fails with a configuration err
 - `enableStartTls`: Enables `STARTTLS` on the plain submission port.
 - `enableTls`: Enables the implicit TLS submission listener on `tlsPort`.
 
-For Bun deployments, implicit TLS on `465` and `995` is the recommended client path. Plain-port upgrade commands (`STARTTLS` / `STLS`) should remain disabled until Bun's server-side socket upgrade path is reliable.
+For Bun deployments, implicit TLS on `465`, `993`, and `995` is the recommended client path. Plain-port upgrade commands (`STARTTLS` / `STLS`) should remain disabled until Bun's server-side socket upgrade path is reliable.
 
 Deployment finding and decision:
 
-- Finding: on this Bun deployment, server-side upgrades from plaintext to TLS on an existing socket were not reliable for SMTP `STARTTLS` or POP3 `STLS`.
-- Decision: use implicit TLS by port number for clients, keep `465` and `995` enabled, and leave plain-port TLS upgrades disabled until Bun's upgrade path is verified working.
-- Client guidance: configure mail clients for implicit TLS on `465` for submission and `995` for POP3.
+- Finding: on this Bun deployment, server-side upgrades from plaintext to TLS on an existing socket were not reliable for SMTP `STARTTLS`, POP3 `STLS`, or IMAP `STARTTLS`.
+- Decision: use implicit TLS by port number for clients, keep `465`, `993`, and `995` enabled, and leave plain-port TLS upgrades disabled until Bun's upgrade path is verified working.
+- Client guidance: configure mail clients for implicit TLS on `465` for submission, `993` for IMAP, and `995` for POP3.
 
 Submission is separate from inbound SMTP:
 
@@ -203,6 +230,16 @@ This creates mailbox storage under:
 - `data/mailboxes/<mailbox>/cur`
 - `data/mailboxes/<mailbox>/tmp`
 - `data/mailboxes/<mailbox>/meta`
+- `data/mailboxes/<mailbox>/messages`
+- `data/mailboxes/<mailbox>/folders`
+
+Storage model notes:
+
+- raw message blobs stay in `cur/*.eml`
+- `meta/*.json` holds `INBOX` folder records, including POP3-visible metadata and IMAP flags
+- `messages/*.json` holds shared per-message metadata
+- extra IMAP folders keep their own per-folder metadata under `folders/`
+- POP3 and IMAP expose the same underlying stored mail, with POP3 reading the `INBOX` view only
 
 ### `domains`
 

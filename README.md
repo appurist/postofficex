@@ -1,6 +1,6 @@
 # postofficex
 
-PostOfficeX is a Bun-based mail server that accepts inbound email over SMTP, supports authenticated SMTP client submission for outbound mail, stores local messages on disk, and exposes POP3 so clients can fetch stored mail.
+PostOfficeX is a Bun-based mail server that accepts inbound email over SMTP, supports authenticated SMTP client submission for outbound mail, stores local messages on disk, and exposes POP3 and IMAP for client access.
 
 ## Features
 
@@ -11,9 +11,10 @@ PostOfficeX is a Bun-based mail server that accepts inbound email over SMTP, sup
 - Raw `.eml` message preservation under `data/`
 - Attachment metadata extraction into sidecar JSON
 - POP3 retrieval with `STAT`, `LIST`, `UIDL`, `RETR`, `DELE`, `RSET`, `QUIT`
+- IMAP folder access with `LIST`, `SELECT`, `FETCH`, `STORE`, `SEARCH`, `COPY`, `APPEND`, `EXPUNGE`, and `IDLE`
 - Standard POP3 delete-on-`QUIT` semantics
-- Implicit TLS client listeners on `465` (submission) and `995` (POP3)
-- Optional SMTP `STARTTLS` and POP3 `STLS` configuration, with Bun deployment caveats
+- Implicit TLS client listeners on `465` (submission), `995` (POP3), and `993` (IMAP)
+- Optional SMTP `STARTTLS`, POP3 `STLS`, and IMAP `STARTTLS` configuration, with Bun deployment caveats
 - Optional admin HTML UI for editing global settings and users
 - Optional admin `/ping` JSON health endpoint on the admin port
 - Optional HTTPS for the admin listener using the configured TLS certificate and key
@@ -29,7 +30,7 @@ bun -e "console.log(await Bun.password.hash('change-me'))"
 
 3. Put the hash into `config.json`.
 4. Update domains, users, ports, and TLS paths as needed.
-   The example config does not create any mail users by default, so define at least one user before testing SMTP, submission, or POP3.
+   The example config does not create any mail users by default, so define at least one user before testing SMTP, submission, POP3, or IMAP.
    To enable the admin UI, set `admin.password` or `admin.passwordHash` in `config.json`.
 5. Start the server:
 
@@ -82,9 +83,13 @@ Important:
 
 Messages are stored beneath the configured storage root, by default `./data`:
 
-- `data/mailboxes/<mailbox>/cur/*.eml`: committed messages
+- `data/mailboxes/<mailbox>/cur/*.eml`: raw stored message blobs
 - `data/mailboxes/<mailbox>/tmp/*.tmp`: in-progress SMTP writes
-- `data/mailboxes/<mailbox>/meta/*.json`: POP3 metadata, envelope data, and attachment metadata
+- `data/mailboxes/<mailbox>/meta/*.json`: `INBOX` folder records, POP3-visible metadata, flags, and envelope data
+- `data/mailboxes/<mailbox>/messages/*.json`: shared message metadata
+- `data/mailboxes/<mailbox>/folders/<folder>/`: additional IMAP folders and per-folder metadata
+
+POP3 and IMAP operate on the same stored mail. POP3 reads the `INBOX` view. IMAP exposes `INBOX` plus user-created folders, per-folder UIDs, and message flags.
 
 ## Client Submission
 
@@ -92,6 +97,8 @@ Use the submission listeners for mail clients:
 
 - `587`: SMTP submission with `AUTH`
 - `465`: implicit TLS SMTP submission
+- `993`: implicit TLS IMAP
+- `995`: implicit TLS POP3
 
 Submission uses the configured mail users:
 
@@ -107,20 +114,22 @@ Local-only submitted messages are stored directly in local mailboxes. Submitted 
 This deployment currently uses implicit TLS on dedicated ports as the supported client path:
 
 - `465` for SMTP submission
+- `993` for IMAP
 - `995` for POP3
 
 Finding:
 
-- Bun's server-side plain-socket upgrade path is not currently reliable here for SMTP `STARTTLS` / POP3 `STLS`.
+- Bun's server-side plain-socket upgrade path is not currently reliable here for SMTP `STARTTLS` / POP3 `STLS` / IMAP `STARTTLS`.
 
 Decision:
 
 - keep implicit TLS enabled on dedicated ports
-- keep `STARTTLS` / `STLS` disabled in production config until Bun's upgrade path is verified working
+- keep `STARTTLS`, `STLS`, and IMAP `STARTTLS` disabled in production config until Bun's upgrade path is verified working
 
 Operationally, this means:
 
 - mail clients should use `465` instead of `587 STARTTLS`
+- mail clients should use `993` instead of `143 STARTTLS`
 - mail clients should use `995` instead of `110 STLS`
 - inbound SMTP on `25` currently runs without `STARTTLS`
 
@@ -129,7 +138,7 @@ Operationally, this means:
 - The inbound SMTP listener only accepts mail for explicitly configured local addresses.
 - The submission listener requires authentication and is intended for trusted mail clients.
 - Outbound delivery goes directly to recipient MX hosts. There is no unauthenticated open relay and no smarthost relay configuration.
-- It does not implement IMAP, spam filtering, antivirus scanning, or DKIM.
+- It does not implement spam filtering, antivirus scanning, or DKIM.
 - For internet-facing deployments, provide real certificates and bind to standard ports through your service manager or container runtime.
 
 ## Let's Encrypt

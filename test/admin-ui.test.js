@@ -53,6 +53,8 @@ async function setupAdminServer({
   const submissionTlsPort = await reservePort();
   const pop3Port = await reservePort();
   const pop3TlsPort = await reservePort();
+  const imapPort = await reservePort();
+  const imapTlsPort = await reservePort();
   const adminPort = await reservePort();
   const config = {
     server: {
@@ -76,6 +78,15 @@ async function setupAdminServer({
         port: pop3Port,
         tlsPort: pop3TlsPort,
         allowPlaintext: true,
+        enableStartTls: false,
+        enableTls: false
+      },
+      imap: {
+        host: "127.0.0.1",
+        port: imapPort,
+        tlsPort: imapTlsPort,
+        allowPlaintext: false,
+        enableStartTls: false,
         enableTls: false
       }
     },
@@ -265,6 +276,10 @@ describe("admin ui", () => {
         pop3Port: "3111",
         pop3TlsPort: "3996",
         pop3AllowPlaintext: "on",
+        imapHost: "127.0.0.1",
+        imapPort: "3143",
+        imapTlsPort: "3993",
+        imapEnableTls: "on",
         outboundGreetingHostname: "mail.changed.test",
         outboundConnectTimeoutMs: "45000",
         outboundPreferStartTls: "on",
@@ -303,6 +318,9 @@ describe("admin ui", () => {
     expect(saved.server.smtp.hostname).toBe("mail.changed.test");
     expect(saved.server.submission.port).toBe(3587);
     expect(saved.server.submission.tlsPort).toBe(3465);
+    expect(saved.server.imap.port).toBe(3143);
+    expect(saved.server.imap.tlsPort).toBe(3993);
+    expect(saved.server.imap.enableTls).toBe(true);
     expect(saved.domains).toEqual(["example.test", "example.net"]);
     expect(saved.outbound.greetingHostname).toBe("mail.changed.test");
     expect(saved.outbound.connectTimeoutMs).toBe(45000);
