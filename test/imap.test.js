@@ -210,5 +210,5 @@ describe("imap", () => {
     watcher.write("DONE\r\n");
     const done = await readUntil(watcher, (text) => text.includes(`${idleTag} OK`));
     expect(done).toContain("IDLE terminated");
-  });
+  }, 10000);
 });

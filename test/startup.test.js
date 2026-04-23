@@ -1,8 +1,33 @@
 import { describe, expect, test } from "bun:test";
-import { formatStartupError } from "../src/index.js";
+import { argsRequestVersion, formatStartupError } from "../src/index.js";
 import { setupServer } from "./helpers.js";
+import { APP_NAME, APP_VERSION, formatVersionLine } from "../src/version.js";
 
 describe("startup errors", () => {
+  test("detects version cli flags", () => {
+    expect(argsRequestVersion(["--version"])).toBe(true);
+    expect(argsRequestVersion(["-v"])).toBe(true);
+    expect(argsRequestVersion(["--help"])).toBe(false);
+    expect(formatVersionLine()).toBe(`${APP_NAME} ${APP_VERSION}`);
+  });
+
+  test("prints the version from the cli", async () => {
+    const child = Bun.spawn({
+      cmd: [process.execPath, "run", "src/index.js", "--version"],
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe"
+    });
+
+    const stdout = await new Response(child.stdout).text();
+    const stderr = await new Response(child.stderr).text();
+    const exitCode = await child.exited;
+
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toBe(formatVersionLine());
+    expect(stderr.trim()).toBe("");
+  });
+
   test("formats missing config errors clearly", () => {
     const error = new Error("missing");
     error.code = "ENOENT";

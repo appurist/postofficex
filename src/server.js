@@ -10,6 +10,7 @@ import { ImapConnectionHandler } from "./imap.js";
 import { logger } from "./logger.js";
 import { OutboundSmtpRelay } from "./outbound.js";
 import { endStream, ensureDirectory, ensureTrailingCrlf, generateMessageId, stripSmtpPath, writeToStream } from "./util.js";
+import { APP_VERSION } from "./version.js";
 
 function decodeBase64Utf8(value) {
   try {
@@ -210,6 +211,7 @@ export class PostOfficeServer {
     await this.adminServer.start();
 
     this.log.info("server.started", {
+      version: APP_VERSION,
       smtpPort: this.config.server.smtp.port,
       submissionPort: this.config.server.submission.port,
       submissionTlsPort: this.config.server.submission.enableTls ? this.config.server.submission.tlsPort : null,

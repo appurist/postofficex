@@ -3,6 +3,7 @@ import http from "node:http";
 import https from "node:https";
 import { saveConfig } from "./config.js";
 import { buildUserDirectory } from "./config.js";
+import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from "./version.js";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -149,10 +150,11 @@ function renderLayout(title, body, flash = "") {
 
 function renderLoginPage(flash = "") {
   return renderLayout(
-    "PostOfficeX Admin",
+    `${APP_DISPLAY_NAME} Admin`,
     `<div class="card" style="max-width: 420px; margin: 80px auto 0;">
-      <h1>PostOfficeX Admin</h1>
+      <h1>${APP_DISPLAY_NAME} Admin</h1>
       <p>Sign in to manage global server settings and mail users.</p>
+      <p>Version ${escapeHtml(APP_VERSION)}</p>
       <form method="post" action="/login">
         <label for="password">Admin password</label>
         <input id="password" name="password" type="password" required>
@@ -208,8 +210,8 @@ function renderAdminPage(config, flash = "") {
   const usersHtml = config.users.map(renderUserEditor).join("");
   const body = `<div class="topbar">
       <div>
-        <h1>PostOfficeX Admin</h1>
-        <p>Admin UI changes are written back to <span class="mono">${escapeHtml(config.configPath)}</span>.<br>Listener host, port, and TLS material changes may require a restart.</p>
+        <h1>${APP_DISPLAY_NAME} Admin</h1>
+        <p>Version ${escapeHtml(APP_VERSION)}. Admin UI changes are written back to <span class="mono">${escapeHtml(config.configPath)}</span>.<br>Listener host, port, and TLS material changes may require a restart.</p>
       </div>
       <form method="post" action="/logout">
         <button class="secondary" type="submit">Log out</button>
@@ -387,7 +389,7 @@ function renderAdminPage(config, flash = "") {
       </section>
     </div>`;
 
-  return renderLayout("PostOfficeX Admin", body, flash);
+  return renderLayout(`${APP_DISPLAY_NAME} Admin`, body, flash);
 }
 
 export class AdminUiServer {
@@ -554,7 +556,7 @@ export class AdminUiServer {
         response,
         200,
         { "Content-Type": "application/json; charset=utf-8" },
-        JSON.stringify({ status: "OK", name: "postofficex" })
+        JSON.stringify({ status: "OK", name: APP_NAME, version: APP_VERSION })
       );
       return;
     }

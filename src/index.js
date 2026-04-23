@@ -3,9 +3,14 @@ import { loadConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { PostOfficeServer } from "./server.js";
 import { MailboxStore } from "./storage.js";
+import { formatVersionLine } from "./version.js";
 
 const configPath = process.env.POSTOFFICEX_CONFIG ?? "./config.json";
 const pidFile = process.env.POSTOFFICEX_PID_FILE ?? "";
+
+export function argsRequestVersion(argv = process.argv.slice(2)) {
+  return argv.includes("--version") || argv.includes("-v");
+}
 
 export function formatStartupError(error, resolvedConfigPath = configPath) {
   if (error && typeof error === "object") {
@@ -26,6 +31,11 @@ export function formatStartupError(error, resolvedConfigPath = configPath) {
 }
 
 async function main() {
+  if (argsRequestVersion()) {
+    console.log(formatVersionLine());
+    return;
+  }
+
   const config = await loadConfig(configPath);
   const store = new MailboxStore(config);
   const server = new PostOfficeServer(config, store, logger);

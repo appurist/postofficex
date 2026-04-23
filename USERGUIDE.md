@@ -21,6 +21,12 @@ $env:POSTOFFICEX_CONFIG="C:\mail\config.json"
 
 If the config file is missing or invalid, startup fails with a configuration error message.
 
+To print the application version without loading config or starting listeners:
+
+```bash
+bun run src/index.js --version
+```
+
 ## Full Config Example
 
 ```json
@@ -338,7 +344,7 @@ GET /ping
 Response:
 
 ```json
-{"status":"OK","name":"postofficex"}
+{"status":"OK","name":"postofficex","version":"0.1.0"}
 ```
 
 This is useful for:

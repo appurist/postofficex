@@ -7,6 +7,7 @@ import { loadConfig } from "../src/config.js";
 import { PostOfficeServer } from "../src/server.js";
 import { MailboxStore } from "../src/storage.js";
 import { reservePort } from "./helpers.js";
+import { APP_NAME, APP_VERSION } from "../src/version.js";
 
 let activeServer = null;
 
@@ -151,7 +152,7 @@ describe("admin ui", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/json");
-    expect(await response.json()).toEqual({ status: "OK", name: "postofficex" });
+    expect(await response.json()).toEqual({ status: "OK", name: APP_NAME, version: APP_VERSION });
   });
 
   test("serves /ping over https when admin tls is enabled", async () => {
@@ -161,7 +162,7 @@ describe("admin ui", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("application/json");
-    expect(JSON.parse(response.body)).toEqual({ status: "OK", name: "postofficex" });
+    expect(JSON.parse(response.body)).toEqual({ status: "OK", name: APP_NAME, version: APP_VERSION });
   });
 
   test("logs admin requests when request logging is enabled but skips /ping", async () => {
@@ -241,6 +242,7 @@ describe("admin ui", () => {
     expect(dashboard.status).toBe(200);
     expect(html).toContain("Global Settings");
     expect(html).toContain("Users");
+    expect(html).toContain(`Version ${APP_VERSION}`);
   });
 
   test("saves global config and users through the admin ui", async () => {

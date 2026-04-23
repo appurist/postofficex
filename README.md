@@ -38,6 +38,12 @@ bun -e "console.log(await Bun.password.hash('change-me'))"
 bun run src/index.js
 ```
 
+To print the application version without starting listeners:
+
+```bash
+bun run src/index.js --version
+```
+
 If `config.json` is missing or unreadable, startup now reports a direct configuration error that includes the expected path and suggests setting `POSTOFFICEX_CONFIG`.
 
 Or build a single Bun-targeted binary:
@@ -69,7 +75,7 @@ GET /ping
 Response:
 
 ```json
-{"status":"OK","name":"postofficex"}
+{"status":"OK","name":"postofficex","version":"0.1.0"}
 ```
 
 This is intended for uptime checks and basic status monitoring on the admin port.
