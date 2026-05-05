@@ -578,9 +578,11 @@ describe("admin ui", () => {
       }).toString()
     });
 
-    const page = await fetch(`http://127.0.0.1:${activeServer.adminPort}/lists/alice`);
+    const page = await fetch(`http://127.0.0.1:${activeServer.adminPort}/lists/alice/subscribe`);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain("News");
+    const pageHtml = await page.text();
+    expect(pageHtml).toContain("Subscribe to:");
+    expect(pageHtml).toContain("News");
 
     const subscribe = await fetch(`http://127.0.0.1:${activeServer.adminPort}/lists/alice/subscribe`, {
       method: "POST",

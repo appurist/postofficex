@@ -490,8 +490,8 @@ Each mailbox can own one optional newsletter.
 - `enabled`: Enables newsletter behavior for this mailbox.
 - `address`: The newsletter posting address. It must also appear in the same user's `addresses`.
 - `title`: Display name used on public pages and notification messages.
-- `publicSubscription`: Enables the public subscribe form at `/lists/<mailbox>`.
-- `publicUnsubscribe`: Enables the public unsubscribe form at `/lists/<mailbox>`.
+- `publicSubscription`: Enables the public subscribe form at `/lists/<mailbox>/subscribe`.
+- `publicUnsubscribe`: Enables the public unsubscribe form at `/lists/<mailbox>/unsubscribe`.
 - `subscribers`: Confirmed subscriber records. The admin UI and public routes maintain this list.
 - `pendingSubscriptions`: Email confirmation records waiting to be confirmed.
 

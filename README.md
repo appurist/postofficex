@@ -99,7 +99,7 @@ PostOfficeX now reads three sibling files:
 
 One mailbox can have multiple recipient addresses through a single user entry. Put every address for that mailbox in the same user's `addresses` array.
 
-A mailbox can also own one optional newsletter. The newsletter address must be one of that user's configured addresses. Public subscribe, confirm, and unsubscribe pages are served from the existing admin HTTP(S) listener under `/lists/<mailbox>` when the admin listener is enabled.
+A mailbox can also own one optional newsletter. The newsletter address must be one of that user's configured addresses. Public subscribe, confirm, and unsubscribe pages are served from the existing admin HTTP(S) listener under `/lists/<mailbox>/subscribe` and `/lists/<mailbox>/unsubscribe` when the admin listener is enabled.
 
 ## Storage Layout
 

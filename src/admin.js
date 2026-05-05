@@ -77,7 +77,7 @@ function isAdminPublicRoute(pathname, method) {
     (pathname === "/ping" && method === "GET") ||
     (pathname === "/login" && (method === "GET" || method === "POST")) ||
     (/^\/lists\/[^/]+$/.test(pathname) && method === "GET") ||
-    (/^\/lists\/[^/]+\/subscribe$/.test(pathname) && method === "POST") ||
+    (/^\/lists\/[^/]+\/subscribe$/.test(pathname) && (method === "GET" || method === "POST")) ||
     (/^\/lists\/[^/]+\/confirm$/.test(pathname) && method === "GET") ||
     (/^\/lists\/[^/]+\/unsubscribe$/.test(pathname) && (method === "GET" || method === "POST"))
   );
@@ -530,9 +530,12 @@ function renderAdminPage(config, flash = "") {
   return renderLayout(`${APP_DISPLAY_NAME} Admin`, body, flash);
 }
 
-function renderPublicListPage(user, flash = "") {
+function renderPublicListPage(user, mode, flash = "") {
   const newsletter = user.newsletter;
-  const subscribeForm = newsletter.publicSubscription
+  const isSubscribe = mode === "subscribe";
+  const headingPrefix = isSubscribe ? "Subscribe to:" : "Unsubscribe from:";
+  const action = `/lists/${encodeURIComponent(user.mailbox)}/${mode}`;
+  const form = isSubscribe
     ? `<form method="post" action="/lists/${encodeURIComponent(user.mailbox)}/subscribe">
         <label>Email address</label>
         <input name="email" type="email" required>
@@ -540,23 +543,20 @@ function renderPublicListPage(user, flash = "") {
           <button type="submit">Subscribe</button>
         </div>
       </form>`
-    : "";
-  const unsubscribeForm = newsletter.publicUnsubscribe
-    ? `<form method="post" action="/lists/${encodeURIComponent(user.mailbox)}/unsubscribe">
+    : `<form method="post" action="${action}">
         <label>Email address</label>
         <input name="email" type="email" required>
         <div class="actions">
           <button class="subtle" type="submit">Unsubscribe</button>
         </div>
-      </form>`
-    : "";
+      </form>`;
 
   return renderLayout(
     newsletter.title,
     `<div class="card" style="max-width: 520px; margin: 80px auto 0;">
+      <p style="margin: 0 0 4px; font-size: 14px;">${headingPrefix}</p>
       <h1>${escapeHtml(newsletter.title)}</h1>
-      ${subscribeForm}
-      ${unsubscribeForm}
+      ${form}
     </div>`,
     flash
   );
@@ -823,17 +823,30 @@ export class AdminUiServer {
         this.sendResponse(request, response, 404, { "Content-Type": "text/plain; charset=utf-8" }, "Not found");
         return;
       }
-      this.sendResponse(
-        request,
+      redirect(
         response,
-        200,
-        { "Content-Type": "text/html; charset=utf-8" },
-        renderPublicListPage(user, flash)
+        `/lists/${encodeURIComponent(user.mailbox)}/${user.newsletter.publicSubscription ? "subscribe" : "unsubscribe"}`
       );
       return;
     }
 
     const subscribeMatch = url.pathname.match(/^\/lists\/([^/]+)\/subscribe$/);
+    if (subscribeMatch && method === "GET") {
+      const user = this.findPublicNewsletter(subscribeMatch[1]);
+      if (!user || !user.newsletter.publicSubscription) {
+        this.sendResponse(request, response, 404, { "Content-Type": "text/plain; charset=utf-8" }, "Not found");
+        return;
+      }
+      this.sendResponse(
+        request,
+        response,
+        200,
+        { "Content-Type": "text/html; charset=utf-8" },
+        renderPublicListPage(user, "subscribe", flash)
+      );
+      return;
+    }
+
     if (subscribeMatch && method === "POST") {
       const user = this.findPublicNewsletter(subscribeMatch[1]);
       if (!user || !user.newsletter.publicSubscription) {
@@ -870,7 +883,7 @@ export class AdminUiServer {
           response,
           400,
           { "Content-Type": "text/html; charset=utf-8" },
-          renderPublicListPage(user, error instanceof Error ? error.message : "Subscription failed.")
+          renderPublicListPage(user, "subscribe", error instanceof Error ? error.message : "Subscription failed.")
         );
       }
       return;
@@ -963,7 +976,7 @@ export class AdminUiServer {
         response,
         200,
         { "Content-Type": "text/html; charset=utf-8" },
-        renderPublicListPage(user)
+        renderPublicListPage(user, "unsubscribe")
       );
       return;
     }
