@@ -7,6 +7,7 @@ import { AdminUiServer } from "./admin.js";
 import { authenticateUser, normalizeLoginIdentifier } from "./accounts.js";
 import { buildUserDirectory } from "./config.js";
 import { ImapConnectionHandler } from "./imap.js";
+import { addNewsletterHeaders, buildUnsubscribeUrl, findNewsletterByAddress, listSubscribers } from "./lists.js";
 import { logger } from "./logger.js";
 import { OutboundSmtpRelay } from "./outbound.js";
 import { endStream, ensureDirectory, ensureTrailingCrlf, generateMessageId, stripSmtpPath, writeToStream } from "./util.js";
@@ -206,7 +207,15 @@ export class PostOfficeServer {
       this.config,
       (nextConfig) => this.applyConfig(nextConfig),
       this.log,
-      this.tlsMaterial
+      this.tlsMaterial,
+      {
+        sendListMessage: async (to, rawMessage, mailFrom) => {
+          await this.deliverRawMessage(to, rawMessage, {
+            mailFrom,
+            remoteAddress: null
+          });
+        }
+      }
     );
     await this.adminServer.start();
 
@@ -367,6 +376,21 @@ export class PostOfficeServer {
   isLocalRecipient(address) {
     const [, domain] = address.split("@");
     return Boolean(domain && this.config.domains.includes(domain) && this.users.usersByAddress.has(address));
+  }
+
+  getNewsletterOwner(address) {
+    return findNewsletterByAddress(this.config.users, address);
+  }
+
+  publicBaseUrl() {
+    const protocol = this.config.admin?.enableTls ? "https" : "http";
+    const configuredHost = this.config.admin?.host && this.config.admin.host !== "0.0.0.0"
+      ? this.config.admin.host
+      : this.config.hostname;
+    const host = configuredHost.includes(":") && !configuredHost.startsWith("[") ? `[${configuredHost}]` : configuredHost;
+    const port = this.config.admin?.port;
+    const includePort = port && !((protocol === "http" && port === 80) || (protocol === "https" && port === 443));
+    return `${protocol}://${host}${includePort ? `:${port}` : ""}`;
   }
 
   async authenticateSubmissionUser(username, password) {
@@ -716,6 +740,18 @@ export class PostOfficeServer {
               return;
             }
 
+            const newsletterOwner = this.getNewsletterOwner(address);
+            if (newsletterOwner) {
+              if (state.mode === "inbound") {
+                write("550 5.7.1 newsletter posts require authenticated submission\r\n");
+                return;
+              }
+              if (state.authenticatedUser?.mailbox !== newsletterOwner.mailbox) {
+                write("553 5.7.1 newsletter address not owned by authenticated user\r\n");
+                return;
+              }
+            }
+
             state.rcptTo.push(address);
             write("250 2.1.5 recipient ok\r\n");
           }
@@ -852,13 +888,98 @@ export class PostOfficeServer {
     });
   }
 
+  async deliverRawMessage(recipient, rawMessage, envelope) {
+    if (this.isLocalRecipient(recipient)) {
+      const user = this.users.usersByAddress.get(recipient);
+      if (!user) {
+        return;
+      }
+      await this.store.deliver(user.mailbox, {
+        rawMessage,
+        mailFrom: envelope.mailFrom,
+        rcptTo: [recipient],
+        remoteAddress: envelope.remoteAddress ?? null
+      });
+      return;
+    }
+
+    await this.outboundRelay.deliver({
+      mailFrom: envelope.mailFrom,
+      rcptTo: [recipient],
+      rawMessage
+    });
+  }
+
+  async deliverNewsletterMessage(user, state, messageSource, socket) {
+    const subscribers = listSubscribers(user);
+    if (subscribers.length === 0) {
+      this.log.info("newsletter.no_subscribers", {
+        address: user.newsletter.address,
+        mailbox: user.mailbox,
+        username: user.username
+      });
+      return;
+    }
+
+    const rawMessage = await readFile(messageSource.filePath, "utf8");
+    const publicBaseUrl = this.publicBaseUrl();
+    let delivered = 0;
+    let failed = 0;
+
+    for (const subscriber of subscribers) {
+      const unsubscribeUrl = buildUnsubscribeUrl(publicBaseUrl, user, subscriber.email, "");
+      const rawForSubscriber = addNewsletterHeaders(
+        rawMessage,
+        user,
+        subscriber.email,
+        unsubscribeUrl
+      );
+
+      try {
+        await this.deliverRawMessage(subscriber.email, rawForSubscriber, {
+          mailFrom: state.mailFrom,
+          remoteAddress: socket.remoteAddress ?? null
+        });
+        delivered += 1;
+      } catch (error) {
+        failed += 1;
+        this.log.warn("newsletter.delivery_failed", {
+          address: user.newsletter.address,
+          subscriber: subscriber.email,
+          error: `${error}`
+        });
+      }
+    }
+
+    this.log.info("newsletter.delivered", {
+      address: user.newsletter.address,
+      mailbox: user.mailbox,
+      username: user.username,
+      delivered,
+      failed
+    });
+
+    if (delivered === 0 && failed > 0) {
+      throw new Error(`Newsletter delivery failed for all ${failed} subscribers`);
+    }
+  }
+
   async acceptSmtpMessage(state, messageSource, socket) {
     if (state.mode === "submission") {
-      const localRecipients = state.rcptTo.filter((address) => this.isLocalRecipient(address));
-      const remoteRecipients = state.rcptTo.filter((address) => !this.isLocalRecipient(address));
+      const newsletterRecipients = state.rcptTo
+        .map((address) => this.getNewsletterOwner(address))
+        .filter(Boolean)
+        .filter((user, index, users) => users.findIndex((item) => item.mailbox === user.mailbox) === index);
+      const newsletterAddresses = new Set(newsletterRecipients.map((user) => user.newsletter.address));
+      const localRecipients = state.rcptTo.filter((address) => !newsletterAddresses.has(address) && this.isLocalRecipient(address));
+      const remoteRecipients = state.rcptTo.filter((address) => !newsletterAddresses.has(address) && !this.isLocalRecipient(address));
 
       if (localRecipients.length > 0) {
         await this.storeLocalMessage(localRecipients, state, messageSource, socket, "smtp.submission_stored");
+      }
+
+      for (const user of newsletterRecipients) {
+        await this.deliverNewsletterMessage(user, state, messageSource, socket);
       }
 
       if (remoteRecipients.length === 0) {

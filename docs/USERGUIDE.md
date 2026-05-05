@@ -125,7 +125,16 @@ bun run src/index.js --version
     "addresses": [
       "alice@example.com",
       "support@example.com"
-    ]
+    ],
+    "newsletter": {
+      "enabled": true,
+      "address": "support@example.com",
+      "title": "Example Newsletter",
+      "publicSubscription": true,
+      "publicUnsubscribe": true,
+      "subscribers": [],
+      "pendingSubscriptions": []
+    }
   }
 ]
 ```
@@ -383,6 +392,7 @@ Each entry in `users` defines:
 - the mailbox folder name on disk
 - the password hash used for POP3 login and SMTP submission auth
 - the full email addresses that deliver into that mailbox
+- optional newsletter settings owned by that mailbox
 
 Example:
 
@@ -394,7 +404,16 @@ Example:
   "addresses": [
     "alice@example.com",
     "support@example.com"
-  ]
+  ],
+  "newsletter": {
+    "enabled": true,
+    "address": "support@example.com",
+    "title": "Example Newsletter",
+    "publicSubscription": true,
+    "publicUnsubscribe": true,
+    "subscribers": [],
+    "pendingSubscriptions": []
+  }
 }
 ```
 
@@ -463,6 +482,24 @@ Example:
 ```
 
 All three addresses deliver into the same mailbox.
+
+### `newsletter`
+
+Each mailbox can own one optional newsletter.
+
+- `enabled`: Enables newsletter behavior for this mailbox.
+- `address`: The newsletter posting address. It must also appear in the same user's `addresses`.
+- `title`: Display name used on public pages and notification messages.
+- `publicSubscription`: Enables the public subscribe form at `/lists/<mailbox>`.
+- `publicUnsubscribe`: Enables the public unsubscribe form at `/lists/<mailbox>`.
+- `subscribers`: Confirmed subscriber records. The admin UI and public routes maintain this list.
+- `pendingSubscriptions`: Email confirmation records waiting to be confirmed.
+
+Newsletter subscriptions require email confirmation. When a visitor subscribes, PostOfficeX sends a confirmation link to that address. After confirmation, the subscriber and mailbox owner are notified. Unsubscribes also notify both the subscriber and owner.
+
+To send a newsletter, authenticate to SMTP submission as the owning user and send to the newsletter address. PostOfficeX expands the message to confirmed subscribers and adds list headers. Unauthenticated inbound SMTP cannot post to a newsletter address.
+
+The public subscribe and unsubscribe pages are served by the existing admin listener, so `admin.password` or `admin.passwordHash` must be set for the listener to start. Protect the admin login when exposing these public list pages.
 
 ## How SMTP Recipient Matching Works
 

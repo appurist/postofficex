@@ -6,6 +6,15 @@
     "addresses": [
       "alice@example.com",
       "support@example.com"
-    ]
+    ],
+    "newsletter": {
+      "enabled": false,
+      "address": "support@example.com",
+      "title": "Example Newsletter",
+      "publicSubscription": true,
+      "publicUnsubscribe": true,
+      "subscribers": [],
+      "pendingSubscriptions": []
+    }
   }
 ]

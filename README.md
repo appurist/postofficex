@@ -8,6 +8,7 @@ PostOfficeX is a Bun-based mail server that accepts inbound email over SMTP, sup
 - Authenticated SMTP submission for mail clients on ports `587` and `465`
 - Outbound SMTP delivery to recipient MX hosts
 - Per-recipient mailboxes from file config
+- Optional mailbox-owned newsletters with public subscribe, email confirmation, and unsubscribe
 - Raw `.eml` message preservation under `data/`
 - Attachment metadata extraction into sidecar JSON
 - POP3 retrieval with `STAT`, `LIST`, `UIDL`, `RETR`, `DELE`, `RSET`, `QUIT`
@@ -98,6 +99,8 @@ PostOfficeX now reads three sibling files:
 
 One mailbox can have multiple recipient addresses through a single user entry. Put every address for that mailbox in the same user's `addresses` array.
 
+A mailbox can also own one optional newsletter. The newsletter address must be one of that user's configured addresses. Public subscribe, confirm, and unsubscribe pages are served from the existing admin HTTP(S) listener under `/lists/<mailbox>` when the admin listener is enabled.
+
 ## Storage Layout
 
 Messages are stored beneath the configured storage root, by default `./data`:
@@ -127,6 +130,8 @@ Submission uses the configured mail users:
 - submitted `MAIL FROM` must match one of that user's configured `addresses`
 
 Local-only submitted messages are stored directly in local mailboxes. Submitted messages with external recipients are delivered outbound to the recipient domain's MX hosts.
+
+If a user has a newsletter enabled, authenticated submission by that same user to the newsletter address expands the message to confirmed subscribers. Internet inbound SMTP cannot post to newsletter addresses.
 
 ## TLS Decision
 

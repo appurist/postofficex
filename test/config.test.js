@@ -226,4 +226,84 @@ describe("config", () => {
 
     await expect(loadConfig(localPath)).rejects.toThrow('Duplicate address "shared@example.test"');
   });
+
+  test("normalizes newsletter settings and subscriber state", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "postofficex-config-"));
+    const configDir = join(rootDir, "data");
+    await mkdir(configDir, { recursive: true });
+    const defaultsPath = join(configDir, "defaults.json");
+    const localPath = join(configDir, "local.json");
+    const usersPath = join(configDir, "users.json");
+
+    await writeJson(defaultsPath, {});
+    await writeJson(localPath, {
+      hostname: "mail.example.test",
+      domains: ["example.test"]
+    });
+    await writeJson(usersPath, [
+      {
+        username: "alice",
+        mailbox: "alice",
+        passwordHash: "$argon2id$alice",
+        addresses: ["Alice@Example.Test", "News@Example.Test"],
+        newsletter: {
+          enabled: true,
+          address: "News@Example.Test",
+          title: "News",
+          publicSubscription: true,
+          publicUnsubscribe: true,
+          subscribers: [
+            { email: "Bob@Remote.Test", unsubscribeTokenHash: "hash-a" },
+            { email: "bob@remote.test", unsubscribeTokenHash: "hash-b" }
+          ],
+          pendingSubscriptions: [
+            { email: "Carol@Remote.Test", confirmationTokenHash: "confirm-a" }
+          ]
+        }
+      }
+    ]);
+
+    const config = await loadConfig(localPath);
+
+    expect(config.users[0].addresses).toEqual(["alice@example.test", "news@example.test"]);
+    expect(config.users[0].newsletter).toMatchObject({
+      enabled: true,
+      address: "news@example.test",
+      title: "News",
+      publicSubscription: true,
+      publicUnsubscribe: true
+    });
+    expect(config.users[0].newsletter.subscribers).toHaveLength(1);
+    expect(config.users[0].newsletter.subscribers[0].email).toBe("bob@remote.test");
+    expect(config.users[0].newsletter.pendingSubscriptions[0].email).toBe("carol@remote.test");
+  });
+
+  test("rejects newsletter addresses not owned by the mailbox user", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "postofficex-config-"));
+    const configDir = join(rootDir, "data");
+    await mkdir(configDir, { recursive: true });
+    const defaultsPath = join(configDir, "defaults.json");
+    const localPath = join(configDir, "local.json");
+    const usersPath = join(configDir, "users.json");
+
+    await writeJson(defaultsPath, {});
+    await writeJson(localPath, {
+      hostname: "mail.example.test",
+      domains: ["example.test"]
+    });
+    await writeJson(usersPath, [
+      {
+        username: "alice",
+        mailbox: "alice",
+        passwordHash: "$argon2id$alice",
+        addresses: ["alice@example.test"],
+        newsletter: {
+          enabled: true,
+          address: "news@example.test"
+        }
+      }
+    ]);
+
+    await expect(loadConfig(localPath)).rejects.toThrow("must be one of that user's addresses");
+  });
 });

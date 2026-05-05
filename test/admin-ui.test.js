@@ -544,4 +544,77 @@ describe("admin ui", () => {
     expect(await Bun.password.verify("newadminpw", localSaved.admin.passwordHash)).toBe(true);
     expect(await Bun.password.verify("adminpw", localSaved.admin.passwordHash)).toBe(false);
   });
+
+  test("public newsletter subscribe confirms by email and updates users config", async () => {
+    activeServer = await setupAdminServer();
+
+    const login = await fetch(`http://127.0.0.1:${activeServer.adminPort}/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      redirect: "manual",
+      body: new URLSearchParams({ password: "adminpw" }).toString()
+    });
+    const cookie = login.headers.get("set-cookie");
+
+    await fetch(`http://127.0.0.1:${activeServer.adminPort}/users/save`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Cookie: cookie
+      },
+      redirect: "manual",
+      body: new URLSearchParams({
+        originalUsername: "alice",
+        username: "alice",
+        mailbox: "alice",
+        addresses: "alice@example.test\nnews@example.test",
+        newsletterEnabled: "on",
+        newsletterAddress: "news@example.test",
+        newsletterTitle: "News",
+        newsletterPublicSubscription: "on",
+        newsletterPublicUnsubscribe: "on"
+      }).toString()
+    });
+
+    const page = await fetch(`http://127.0.0.1:${activeServer.adminPort}/lists/alice`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("News");
+
+    const subscribe = await fetch(`http://127.0.0.1:${activeServer.adminPort}/lists/alice/subscribe`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({ email: "alice@example.test" }).toString()
+    });
+    expect(subscribe.status).toBe(200);
+
+    let usersSaved = JSON.parse(await readFile(activeServer.configPaths.users, "utf8"));
+    expect(usersSaved[0].newsletter.pendingSubscriptions).toHaveLength(1);
+    expect(usersSaved[0].newsletter.pendingSubscriptions[0].email).toBe("alice@example.test");
+
+    const rawMessages = [];
+    const curGlob = new Bun.Glob("*.eml");
+    for await (const file of curGlob.scan({
+      cwd: join(activeServer.server.config.storage.rootDir, "mailboxes", "alice", "cur"),
+      absolute: true
+    })) {
+      rawMessages.push(await readFile(file, "utf8"));
+    }
+    const confirmationMessage = rawMessages.find((message) => message.includes("/lists/alice/confirm?"));
+    expect(confirmationMessage).toBeTruthy();
+    const confirmUrl = confirmationMessage.match(/http:\/\/127\.0\.0\.1:\d+\/lists\/alice\/confirm\?[^\s]+/)?.[0];
+    expect(confirmUrl).toBeTruthy();
+
+    const confirm = await fetch(confirmUrl);
+    expect(confirm.status).toBe(200);
+    expect(await confirm.text()).toContain("confirmed");
+
+    usersSaved = JSON.parse(await readFile(activeServer.configPaths.users, "utf8"));
+    expect(usersSaved[0].newsletter.pendingSubscriptions).toHaveLength(0);
+    expect(usersSaved[0].newsletter.subscribers).toHaveLength(1);
+    expect(usersSaved[0].newsletter.subscribers[0].email).toBe("alice@example.test");
+  });
 });

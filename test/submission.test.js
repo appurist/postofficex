@@ -90,7 +90,7 @@ function createRemoteSmtpServer() {
   return { server, deliveries };
 }
 
-async function setupSubmissionServer({ resolveMx } = {}) {
+async function setupSubmissionServer({ resolveMx, users } = {}) {
   const rootDir = await mkdtemp(join(tmpdir(), "postofficex-submission-"));
   const configDir = join(rootDir, "data");
   await mkdir(configDir, { recursive: true });
@@ -156,7 +156,7 @@ async function setupSubmissionServer({ resolveMx } = {}) {
       rootDir: "./data"
     },
     domains: ["example.test"],
-    users: [
+    users: users ?? [
       {
         username: "alice",
         mailbox: "alice",
@@ -194,7 +194,7 @@ async function setupSubmissionServer({ resolveMx } = {}) {
     outbound: resolveMx ? { resolveMx } : undefined
   });
   await server.start();
-  return { server, submissionPort, pop3Port };
+  return { server, submissionPort, pop3Port, storageRootDir: resolved.storage.rootDir };
 }
 
 async function smtpCommand(socket, command, multiline = false) {
@@ -428,5 +428,94 @@ describe("smtp submission", () => {
     expect(remoteServer.deliveries).toHaveLength(1);
     expect(remoteServer.deliveries[0].rawMessage).toContain("Subject: chunked large mixed submit");
     expect(remoteServer.deliveries[0].rawMessage).toContain("line 2047");
+  });
+
+  test("expands owner-submitted newsletter mail to confirmed subscribers", async () => {
+    remoteServer = createRemoteSmtpServer();
+    const remotePort = await reservePort();
+    await new Promise((resolve, reject) => {
+      remoteServer.server.once("error", reject);
+      remoteServer.server.listen(remotePort, "127.0.0.1", resolve);
+    });
+
+    const passwordHash = await createPasswordHash("secret123");
+    active = await setupSubmissionServer({
+      resolveMx: async () => [{ exchange: "127.0.0.1", port: remotePort, priority: 0 }],
+      users: [
+        {
+          username: "alice",
+          mailbox: "alice",
+          passwordHash,
+          addresses: ["alice@example.test", "news@example.test"],
+          newsletter: {
+            enabled: true,
+            address: "news@example.test",
+            title: "News",
+            publicSubscription: true,
+            publicUnsubscribe: true,
+            subscribers: [
+              {
+                email: "bob@remote.test",
+                subscribedAt: new Date().toISOString(),
+                unsubscribeTokenHash: "hash"
+              }
+            ],
+            pendingSubscriptions: []
+          }
+        }
+      ]
+    });
+
+    const smtp = await connect(active.submissionPort);
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    await smtpCommand(smtp, "EHLO localhost\r\n");
+    const auth = Buffer.from("\u0000alice@example.test\u0000secret123").toString("base64");
+    expect(await smtpCommand(smtp, `AUTH PLAIN ${auth}\r\n`)).toContain("235 2.7.0");
+    expect(await smtpCommand(smtp, "MAIL FROM:<alice@example.test>\r\n")).toContain("250");
+    expect(await smtpCommand(smtp, "RCPT TO:<news@example.test>\r\n")).toContain("250");
+    expect(await smtpCommand(smtp, "DATA\r\n")).toContain("354");
+    expect(
+      await smtpCommand(
+        smtp,
+        "From: alice@example.test\r\nTo: news@example.test\r\nSubject: newsletter\r\n\r\nhello list\r\n.\r\n"
+      )
+    ).toContain("250");
+    expect(await smtpCommand(smtp, "QUIT\r\n")).toContain("221");
+
+    expect(remoteServer.deliveries).toHaveLength(1);
+    expect(remoteServer.deliveries[0].recipients).toEqual(["<bob@remote.test>"]);
+    expect(remoteServer.deliveries[0].rawMessage).toContain("Subject: newsletter");
+    expect(remoteServer.deliveries[0].rawMessage).toContain("List-Id:");
+    expect(remoteServer.deliveries[0].rawMessage).toContain("List-Unsubscribe:");
+  });
+
+  test("rejects newsletter posts from unauthenticated inbound smtp", async () => {
+    const passwordHash = await createPasswordHash("secret123");
+    active = await setupSubmissionServer({
+      users: [
+        {
+          username: "alice",
+          mailbox: "alice",
+          passwordHash,
+          addresses: ["alice@example.test", "news@example.test"],
+          newsletter: {
+            enabled: true,
+            address: "news@example.test",
+            title: "News",
+            publicSubscription: true,
+            publicUnsubscribe: true,
+            subscribers: [],
+            pendingSubscriptions: []
+          }
+        }
+      ]
+    });
+
+    const smtp = await connect(active.server.config.server.smtp.port);
+    await readUntil(smtp, (text) => text.endsWith("\r\n"));
+    await smtpCommand(smtp, "EHLO localhost\r\n");
+    expect(await smtpCommand(smtp, "MAIL FROM:<sender@remote.test>\r\n")).toContain("250");
+    expect(await smtpCommand(smtp, "RCPT TO:<news@example.test>\r\n")).toContain("550 5.7.1");
+    smtp.end();
   });
 });

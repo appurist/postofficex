@@ -3,6 +3,17 @@ import http from "node:http";
 import https from "node:https";
 import { saveConfig } from "./config.js";
 import { buildUserDirectory } from "./config.js";
+import {
+  beginSubscription,
+  buildConfirmUrl,
+  buildEmailMessage,
+  buildPublicListUrl,
+  buildUnsubscribeUrl,
+  confirmSubscription,
+  findNewsletterByMailbox,
+  findSubscriber,
+  removeSubscriber
+} from "./lists.js";
 import { APP_DISPLAY_NAME, APP_NAME, APP_VERSION } from "./version.js";
 
 function escapeHtml(value) {
@@ -64,7 +75,11 @@ function adminCookieAttributes(adminConfig) {
 function isAdminPublicRoute(pathname, method) {
   return (
     (pathname === "/ping" && method === "GET") ||
-    (pathname === "/login" && (method === "GET" || method === "POST"))
+    (pathname === "/login" && (method === "GET" || method === "POST")) ||
+    (/^\/lists\/[^/]+$/.test(pathname) && method === "GET") ||
+    (/^\/lists\/[^/]+\/subscribe$/.test(pathname) && method === "POST") ||
+    (/^\/lists\/[^/]+\/confirm$/.test(pathname) && method === "GET") ||
+    (/^\/lists\/[^/]+\/unsubscribe$/.test(pathname) && (method === "GET" || method === "POST"))
   );
 }
 
@@ -125,7 +140,7 @@ function renderLayout(title, body, flash = "") {
     .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
     .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; box-shadow: 0 10px 30px rgba(50, 35, 10, 0.06); }
     label { display: block; margin: 12px 0 6px; font-size: 14px; color: var(--muted); }
-    input, textarea { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: white; font: inherit; }
+    input, textarea, select { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: white; font: inherit; }
     textarea { min-height: 88px; resize: vertical; }
     .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
     .inline { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
@@ -207,6 +222,13 @@ function renderLoginPage(flash = "") {
 }
 
 function renderUserEditor(user) {
+  const newsletter = user.newsletter ?? {};
+  const options = user.addresses
+    .map(
+      (address) =>
+        `<option value="${escapeHtml(address)}" ${newsletter.address === address ? "selected" : ""}>${escapeHtml(address)}</option>`
+    )
+    .join("");
   return `<div class="user">
     <form method="post" action="/users/save">
       <input type="hidden" name="originalUsername" value="${escapeHtml(user.username)}">
@@ -232,6 +254,20 @@ function renderUserEditor(user) {
           <input name="passwordHash" placeholder="Leave blank to keep existing password hash">
         </div>
       </div>
+      <h3 class="section-heading spacious">Newsletter</h3>
+      <div class="inline"><input name="newsletterEnabled" type="checkbox" ${newsletter.enabled ? "checked" : ""}><span>Enable newsletter for this mailbox</span></div>
+      <div class="row">
+        <div>
+          <label>Newsletter address</label>
+          <select name="newsletterAddress">${options}</select>
+        </div>
+        <div>
+          <label>Newsletter title</label>
+          <input name="newsletterTitle" value="${escapeHtml(newsletter.title ?? "")}" placeholder="Newsletter">
+        </div>
+      </div>
+      <div class="inline"><input name="newsletterPublicSubscription" type="checkbox" ${newsletter.publicSubscription ? "checked" : ""}><span>Allow public subscribe</span></div>
+      <div class="inline"><input name="newsletterPublicUnsubscribe" type="checkbox" ${newsletter.publicUnsubscribe ? "checked" : ""}><span>Allow public unsubscribe</span></div>
       <div class="actions">
         <button type="submit">Save user</button>
       </div>
@@ -465,6 +501,14 @@ function renderAdminPage(config, flash = "") {
           </div>
           <label>Addresses</label>
           <textarea name="addresses" placeholder="alice@example.com&#10;support@example.com" required></textarea>
+          <h3 class="section-heading spacious">Newsletter</h3>
+          <div class="inline"><input name="newsletterEnabled" type="checkbox"><span>Enable newsletter after saving</span></div>
+          <label>Newsletter address</label>
+          <input name="newsletterAddress" placeholder="Must match one address above">
+          <label>Newsletter title</label>
+          <input name="newsletterTitle" placeholder="Newsletter">
+          <div class="inline"><input name="newsletterPublicSubscription" type="checkbox"><span>Allow public subscribe</span></div>
+          <div class="inline"><input name="newsletterPublicUnsubscribe" type="checkbox"><span>Allow public unsubscribe</span></div>
           <div class="row">
             <div>
               <label>Password</label>
@@ -486,12 +530,55 @@ function renderAdminPage(config, flash = "") {
   return renderLayout(`${APP_DISPLAY_NAME} Admin`, body, flash);
 }
 
+function renderPublicListPage(user, flash = "") {
+  const newsletter = user.newsletter;
+  const subscribeForm = newsletter.publicSubscription
+    ? `<form method="post" action="/lists/${encodeURIComponent(user.mailbox)}/subscribe">
+        <label>Email address</label>
+        <input name="email" type="email" required>
+        <div class="actions">
+          <button type="submit">Subscribe</button>
+        </div>
+      </form>`
+    : "";
+  const unsubscribeForm = newsletter.publicUnsubscribe
+    ? `<form method="post" action="/lists/${encodeURIComponent(user.mailbox)}/unsubscribe">
+        <label>Email address</label>
+        <input name="email" type="email" required>
+        <div class="actions">
+          <button class="subtle" type="submit">Unsubscribe</button>
+        </div>
+      </form>`
+    : "";
+
+  return renderLayout(
+    newsletter.title,
+    `<div class="card" style="max-width: 520px; margin: 80px auto 0;">
+      <h1>${escapeHtml(newsletter.title)}</h1>
+      ${subscribeForm}
+      ${unsubscribeForm}
+    </div>`,
+    flash
+  );
+}
+
+function renderPublicMessage(title, message) {
+  return renderLayout(
+    title,
+    `<div class="card" style="max-width: 520px; margin: 80px auto 0;">
+      <h1>${escapeHtml(title)}</h1>
+      <p>${escapeHtml(message)}</p>
+    </div>`
+  );
+}
+
 export class AdminUiServer {
-  constructor(config, onConfigUpdated, log, tlsMaterial) {
+  constructor(config, onConfigUpdated, log, tlsMaterial, deps = {}) {
     this.config = config;
     this.onConfigUpdated = onConfigUpdated;
     this.log = log;
     this.tlsMaterial = tlsMaterial;
+    this.sendListMessage = deps.sendListMessage ?? (async () => {});
     this.server = undefined;
     this.sessions = new Map();
   }
@@ -571,6 +658,41 @@ export class AdminUiServer {
     if (this.config.admin?.enableTls && this.server?.setSecureContext && tlsMaterial) {
       this.server.setSecureContext(tlsMaterial);
     }
+  }
+
+  publicBaseUrl(request) {
+    const protocol = this.config.admin?.enableTls ? "https" : "http";
+    const host = request.headers.host ?? this.config.hostname;
+    return `${protocol}://${host}`;
+  }
+
+  findPublicNewsletter(mailbox) {
+    return findNewsletterByMailbox(this.config.users, decodeURIComponent(mailbox));
+  }
+
+  async sendNewsletterNotice(user, to, subject, text, baseUrl = null) {
+    const rawMessage = buildEmailMessage({
+      from: user.newsletter.address,
+      to,
+      subject,
+      text,
+      hostname: this.config.server.smtp.hostname,
+      headers: baseUrl
+        ? {
+            "List-Id": `<${user.mailbox}.${user.newsletter.address.split("@")[1]}>`,
+            "List-Unsubscribe": `<${buildPublicListUrl(baseUrl, user)}/unsubscribe>`
+          }
+        : {}
+    });
+    await this.sendListMessage(to, rawMessage, user.newsletter.address);
+  }
+
+  async notifyOwner(user, subject, text) {
+    const ownerAddress = user.addresses[0];
+    if (!ownerAddress) {
+      return;
+    }
+    await this.sendNewsletterNotice(user, ownerAddress, subject, text);
   }
 
   async migrateAdminPasswordIfNeeded() {
@@ -691,6 +813,194 @@ export class AdminUiServer {
         Location: "/",
         "Set-Cookie": `postofficex_admin=${token}; ${adminCookieAttributes(this.config.admin)}`
       });
+      return;
+    }
+
+    const publicListMatch = url.pathname.match(/^\/lists\/([^/]+)$/);
+    if (publicListMatch && method === "GET") {
+      const user = this.findPublicNewsletter(publicListMatch[1]);
+      if (!user || (!user.newsletter.publicSubscription && !user.newsletter.publicUnsubscribe)) {
+        this.sendResponse(request, response, 404, { "Content-Type": "text/plain; charset=utf-8" }, "Not found");
+        return;
+      }
+      this.sendResponse(
+        request,
+        response,
+        200,
+        { "Content-Type": "text/html; charset=utf-8" },
+        renderPublicListPage(user, flash)
+      );
+      return;
+    }
+
+    const subscribeMatch = url.pathname.match(/^\/lists\/([^/]+)\/subscribe$/);
+    if (subscribeMatch && method === "POST") {
+      const user = this.findPublicNewsletter(subscribeMatch[1]);
+      if (!user || !user.newsletter.publicSubscription) {
+        this.sendResponse(request, response, 404, { "Content-Type": "text/plain; charset=utf-8" }, "Not found");
+        return;
+      }
+
+      const form = await this.readForm(request);
+      try {
+        const result = beginSubscription(user, form.get("email") ?? "");
+        await saveConfig(this.config);
+        this.onConfigUpdated(this.config);
+        if (result.status === "pending") {
+          const confirmUrl = buildConfirmUrl(this.publicBaseUrl(request), user, result.email, result.confirmationToken);
+          const unsubscribeUrl = buildUnsubscribeUrl(this.publicBaseUrl(request), user, result.email, result.unsubscribeToken);
+          await this.sendNewsletterNotice(
+            user,
+            result.email,
+            `Confirm your subscription to ${user.newsletter.title}`,
+            `Confirm your subscription by opening this link:\n\n${confirmUrl}\n\nAfter confirming, you can unsubscribe with this link:\n\n${unsubscribeUrl}\n\nIf you did not request this, ignore this message.`,
+            this.publicBaseUrl(request)
+          );
+        }
+        this.sendResponse(
+          request,
+          response,
+          200,
+          { "Content-Type": "text/html; charset=utf-8" },
+          renderPublicMessage(user.newsletter.title, "Check your email to confirm the subscription.")
+        );
+      } catch (error) {
+        this.sendResponse(
+          request,
+          response,
+          400,
+          { "Content-Type": "text/html; charset=utf-8" },
+          renderPublicListPage(user, error instanceof Error ? error.message : "Subscription failed.")
+        );
+      }
+      return;
+    }
+
+    const confirmMatch = url.pathname.match(/^\/lists\/([^/]+)\/confirm$/);
+    if (confirmMatch && method === "GET") {
+      const user = this.findPublicNewsletter(confirmMatch[1]);
+      if (!user) {
+        this.sendResponse(request, response, 404, { "Content-Type": "text/plain; charset=utf-8" }, "Not found");
+        return;
+      }
+
+      const email = url.searchParams.get("email") ?? "";
+      const result = confirmSubscription(user, email, url.searchParams.get("token") ?? "");
+      await saveConfig(this.config);
+      this.onConfigUpdated(this.config);
+      if (!result.ok) {
+        this.sendResponse(
+          request,
+          response,
+          400,
+          { "Content-Type": "text/html; charset=utf-8" },
+          renderPublicMessage(user.newsletter.title, "The confirmation link is invalid or expired.")
+        );
+        return;
+      }
+
+      await this.sendNewsletterNotice(
+        user,
+        result.email,
+        `Subscribed to ${user.newsletter.title}`,
+        `You are now subscribed to ${user.newsletter.title}.\n\nTo unsubscribe later, use ${buildPublicListUrl(this.publicBaseUrl(request), user)}/unsubscribe`,
+        this.publicBaseUrl(request)
+      );
+      await this.notifyOwner(
+        user,
+        `New subscriber for ${user.newsletter.title}`,
+        `${result.email} confirmed a subscription to ${user.newsletter.title}.`
+      );
+      this.sendResponse(
+        request,
+        response,
+        200,
+        { "Content-Type": "text/html; charset=utf-8" },
+        renderPublicMessage(user.newsletter.title, "Your subscription is confirmed.")
+      );
+      return;
+    }
+
+    const unsubscribeMatch = url.pathname.match(/^\/lists\/([^/]+)\/unsubscribe$/);
+    if (unsubscribeMatch && method === "GET") {
+      const user = this.findPublicNewsletter(unsubscribeMatch[1]);
+      if (!user || !user.newsletter.publicUnsubscribe) {
+        this.sendResponse(request, response, 404, { "Content-Type": "text/plain; charset=utf-8" }, "Not found");
+        return;
+      }
+
+      const email = url.searchParams.get("email") ?? "";
+      const token = url.searchParams.get("token");
+      if (email && token) {
+        const result = removeSubscriber(user, email, token);
+        await saveConfig(this.config);
+        this.onConfigUpdated(this.config);
+        if (result.ok) {
+          await this.sendNewsletterNotice(
+            user,
+            result.email,
+            `Unsubscribed from ${user.newsletter.title}`,
+            `You have been unsubscribed from ${user.newsletter.title}.`
+          );
+          await this.notifyOwner(
+            user,
+            `Subscriber removed from ${user.newsletter.title}`,
+            `${result.email} unsubscribed from ${user.newsletter.title}.`
+          );
+        }
+        this.sendResponse(
+          request,
+          response,
+          result.ok ? 200 : 400,
+          { "Content-Type": "text/html; charset=utf-8" },
+          renderPublicMessage(user.newsletter.title, result.ok ? "You have been unsubscribed." : "The unsubscribe link is invalid.")
+        );
+        return;
+      }
+
+      this.sendResponse(
+        request,
+        response,
+        200,
+        { "Content-Type": "text/html; charset=utf-8" },
+        renderPublicListPage(user)
+      );
+      return;
+    }
+
+    if (unsubscribeMatch && method === "POST") {
+      const user = this.findPublicNewsletter(unsubscribeMatch[1]);
+      if (!user || !user.newsletter.publicUnsubscribe) {
+        this.sendResponse(request, response, 404, { "Content-Type": "text/plain; charset=utf-8" }, "Not found");
+        return;
+      }
+
+      const form = await this.readForm(request);
+      const email = `${form.get("email") ?? ""}`.trim().toLowerCase();
+      const subscriber = findSubscriber(user, email);
+      if (subscriber) {
+        removeSubscriber(user, email);
+        await saveConfig(this.config);
+        this.onConfigUpdated(this.config);
+        await this.sendNewsletterNotice(
+          user,
+          email,
+          `Unsubscribed from ${user.newsletter.title}`,
+          `You have been unsubscribed from ${user.newsletter.title}.`
+        );
+        await this.notifyOwner(
+          user,
+          `Subscriber removed from ${user.newsletter.title}`,
+          `${email} unsubscribed from ${user.newsletter.title}.`
+        );
+      }
+      this.sendResponse(
+        request,
+        response,
+        200,
+        { "Content-Type": "text/html; charset=utf-8" },
+        renderPublicMessage(user.newsletter.title, "If that address was subscribed, it has been removed.")
+      );
       return;
     }
 
@@ -884,13 +1194,34 @@ export class AdminUiServer {
         return;
       }
 
-      const nextUsers = this.config.users.filter((user) => user.username !== originalUsername && user.username !== username);
-      nextUsers.push({
+      const newsletterEnabled = boolFromForm(form, "newsletterEnabled");
+      const newsletterAddress = (form.get("newsletterAddress") ?? "").trim().toLowerCase() || addresses[0];
+      if (newsletterEnabled && !addresses.includes(newsletterAddress)) {
+        this.setFlashCookie(response, "Newsletter address must match one of the user's addresses.");
+        redirect(response, "/");
+        return;
+      }
+
+      const nextUser = {
         username,
         mailbox,
         passwordHash,
         addresses
-      });
+      };
+      if (newsletterEnabled || existingUser?.newsletter) {
+        nextUser.newsletter = {
+          enabled: newsletterEnabled,
+          address: newsletterAddress,
+          title: (form.get("newsletterTitle") ?? "").trim() || `${username} newsletter`,
+          publicSubscription: boolFromForm(form, "newsletterPublicSubscription"),
+          publicUnsubscribe: boolFromForm(form, "newsletterPublicUnsubscribe"),
+          subscribers: existingUser?.newsletter?.subscribers ?? [],
+          pendingSubscriptions: existingUser?.newsletter?.pendingSubscriptions ?? []
+        };
+      }
+
+      const nextUsers = this.config.users.filter((user) => user.username !== originalUsername && user.username !== username);
+      nextUsers.push(nextUser);
       nextUsers.sort((a, b) => a.username.localeCompare(b.username));
 
       const nextConfig = {

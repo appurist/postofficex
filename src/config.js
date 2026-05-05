@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
+import { normalizeNewsletter } from "./lists.js";
 import { normalizeAddress, resolveFrom } from "./util.js";
 
 const DEFAULTS_CONFIG_NAME = "defaults.json";
@@ -56,12 +57,18 @@ function normalizeUsers(users, sourcePath) {
       seenAddresses.add(address);
     }
 
-    return {
+    const normalizedUser = {
       ...user,
       username,
       mailbox,
       addresses
     };
+
+    if (user.newsletter !== undefined) {
+      normalizedUser.newsletter = normalizeNewsletter(user.newsletter, normalizedUser, sourcePath, index);
+    }
+
+    return normalizedUser;
   });
 }
 
