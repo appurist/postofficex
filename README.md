@@ -1,6 +1,9 @@
 # postofficex
 
-PostOfficeX is a Bun-based mail server that accepts inbound email over SMTP, supports authenticated SMTP client submission for outbound mail, stores local messages on disk, and exposes POP3 and IMAP for client access.
+PostOfficeX is a mail server that accepts inbound email over SMTP, supports authenticated SMTP client submission for outbound mail, stores local messages on disk, and exposes POP3 and IMAP for client access.
+
+## WARNING:
+This is a new development project (May 2026) and not heavily tested yet under real-world conditions. You're free to try it, make suggestions, report problems at https://github.com/appurist/postofficex/issues but it comes **as-is** and **without** any stated or implied warrantees. It is a **best effort** that I made for myself and I'm making it available for everyone to use for free.
 
 ## Features
 
