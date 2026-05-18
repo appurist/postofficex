@@ -39,6 +39,10 @@ function quoteImap(value) {
   return `"${`${value ?? ""}`.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+function nstring(value) {
+  return value ? quoteImap(value) : "NIL";
+}
+
 function formatFlagList(flags = []) {
   return `(${flags.join(" ")})`;
 }
@@ -270,6 +274,112 @@ function bodyText(raw) {
   return splitMessage(raw).bodyText;
 }
 
+function lineCount(value) {
+  if (!value) {
+    return 0;
+  }
+  return value.split(/\r?\n/).length;
+}
+
+function applyPartialLiteral(value, partial) {
+  if (!partial) {
+    return value;
+  }
+  return value.slice(partial.offset, partial.offset + partial.length);
+}
+
+function parseFetchPartial(item) {
+  const match = item.match(/^(.*)<(\d+)\.(\d+)>$/);
+  if (!match) {
+    return { baseItem: item, partial: null };
+  }
+  return {
+    baseItem: match[1],
+    partial: {
+      offset: Number(match[2]),
+      length: Number(match[3])
+    }
+  };
+}
+
+function formatLiteralFetchItem(item, value, partial = null) {
+  const literal = applyPartialLiteral(value, partial);
+  return `${item} {${Buffer.byteLength(literal, "utf8")}}\r\n${literal}`;
+}
+
+function filterHeaderFieldsNot(raw, fields) {
+  const { headerText } = splitMessage(raw);
+  const omitted = new Set(fields.map((field) => field.toLowerCase()));
+  const lines = [];
+  let includeCurrent = false;
+
+  for (const line of headerText.split(/\r?\n/)) {
+    if (/^[ \t]/.test(line)) {
+      if (includeCurrent) {
+        lines.push(line);
+      }
+      continue;
+    }
+    const index = line.indexOf(":");
+    if (index === -1) {
+      includeCurrent = false;
+      continue;
+    }
+    const name = line.slice(0, index).trim().toLowerCase();
+    includeCurrent = !omitted.has(name);
+    if (includeCurrent) {
+      lines.push(line);
+    }
+  }
+
+  return lines.length > 0 ? `${lines.join("\r\n")}\r\n\r\n` : "\r\n";
+}
+
+function parseAddressList(value) {
+  const addresses = `${value ?? ""}`
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const named = item.match(/^(.*?)<([^>]+)>$/);
+      const name = named ? named[1].trim().replace(/^"|"$/g, "") : "";
+      const address = (named ? named[2] : item).trim();
+      const at = address.lastIndexOf("@");
+      if (at <= 0 || at === address.length - 1) {
+        return null;
+      }
+      return `(${nstring(name || null)} NIL ${nstring(address.slice(0, at))} ${nstring(address.slice(at + 1))})`;
+    })
+    .filter(Boolean);
+
+  return addresses.length > 0 ? `(${addresses.join(" ")})` : "NIL";
+}
+
+function formatEnvelope(raw, message) {
+  const { headerText } = splitMessage(raw);
+  const headers = parseHeaders(headerText);
+  const from = headers.get("from") ?? message.from ?? "";
+  const to = headers.get("to") ?? (message.to ?? []).join(", ");
+  const replyTo = headers.get("reply-to") ?? from;
+  return [
+    nstring(headers.get("date") ?? message.receivedAt ?? null),
+    nstring(headers.get("subject") ?? message.subject ?? null),
+    parseAddressList(from),
+    parseAddressList(from),
+    parseAddressList(replyTo),
+    parseAddressList(to),
+    parseAddressList(headers.get("cc")),
+    parseAddressList(headers.get("bcc")),
+    nstring(headers.get("in-reply-to")),
+    nstring(headers.get("message-id"))
+  ].join(" ");
+}
+
+function formatBodyStructure(raw) {
+  const text = bodyText(raw);
+  return `("TEXT" "PLAIN" ("CHARSET" "UTF-8") NIL NIL "7BIT" ${Buffer.byteLength(text, "utf8")} ${lineCount(text)})`;
+}
+
 function formatListAttributes(folderName, allFolderNames) {
   const hasChildren = allFolderNames.some((item) => item !== folderName && item.startsWith(`${folderName}/`));
   return hasChildren ? "(\\HasChildren)" : "(\\HasNoChildren)";
@@ -399,7 +509,8 @@ export class ImapConnectionHandler {
     };
 
     const renderFetchItem = async (message, item) => {
-      const upper = item.toUpperCase();
+      const { baseItem, partial } = parseFetchPartial(item);
+      const upper = baseItem.toUpperCase();
       if (upper === "UID") {
         return `UID ${message.uid}`;
       }
@@ -414,23 +525,33 @@ export class ImapConnectionHandler {
       }
 
       const raw = await this.store.getMessageBlob(state.authenticatedUser.mailbox, message.messageId);
-      if (upper === "BODY[]" || upper === "RFC822") {
-        return `${item} {${Buffer.byteLength(raw, "utf8")}}\r\n${ensureTrailingCrlf(raw)}`;
+      if (upper === "BODYSTRUCTURE") {
+        return `BODYSTRUCTURE ${formatBodyStructure(raw)}`;
+      }
+      if (upper === "BODY[]" || upper === "BODY.PEEK[]" || upper === "RFC822") {
+        return formatLiteralFetchItem(item, ensureTrailingCrlf(raw), partial);
       }
       if (upper === "BODY[HEADER]" || upper === "BODY.PEEK[HEADER]" || upper === "RFC822.HEADER") {
         const headers = splitHeaderFields(raw);
-        return `${item} {${Buffer.byteLength(headers, "utf8")}}\r\n${headers}`;
+        return formatLiteralFetchItem(item, headers, partial);
       }
-      if (upper === "BODY[TEXT]" || upper === "BODY.PEEK[TEXT]" || upper === "RFC822.TEXT") {
+      if (upper === "BODY[TEXT]" || upper === "BODY.PEEK[TEXT]" || upper === "RFC822.TEXT" || upper === "BODY[1]" || upper === "BODY.PEEK[1]") {
         const text = ensureTrailingCrlf(bodyText(raw));
-        return `${item} {${Buffer.byteLength(text, "utf8")}}\r\n${text}`;
+        return formatLiteralFetchItem(item, text, partial);
       }
 
       const headerFields = upper.match(/^BODY(?:\.PEEK)?\[HEADER\.FIELDS\s+\((.+)\)\]$/);
       if (headerFields) {
         const fields = splitTopLevel(headerFields[1]).map((field) => field.replace(/^"|"$/g, ""));
         const filtered = filterHeaderFields(raw, fields);
-        return `${item} {${Buffer.byteLength(filtered, "utf8")}}\r\n${filtered}`;
+        return formatLiteralFetchItem(item, filtered, partial);
+      }
+
+      const headerFieldsNot = upper.match(/^BODY(?:\.PEEK)?\[HEADER\.FIELDS\.NOT\s+\((.+)\)\]$/);
+      if (headerFieldsNot) {
+        const fields = splitTopLevel(headerFieldsNot[1]).map((field) => field.replace(/^"|"$/g, ""));
+        const filtered = filterHeaderFieldsNot(raw, fields);
+        return formatLiteralFetchItem(item, filtered, partial);
       }
 
       throw new Error(`Unsupported FETCH item: ${item}`);
@@ -464,11 +585,10 @@ export class ImapConnectionHandler {
       for (const message of messages) {
         const parts = [];
         for (const item of items) {
-          if (item.toUpperCase() === "ENVELOPE") {
-            parts.push(`ENVELOPE (${quoteImap(message.subject ?? "")} NIL NIL NIL NIL NIL NIL NIL NIL NIL)`);
-            continue;
-          }
-          parts.push(await renderFetchItem(message, item));
+          const raw = item.toUpperCase() === "ENVELOPE"
+            ? await this.store.getMessageBlob(state.authenticatedUser.mailbox, message.messageId)
+            : null;
+          parts.push(raw ? `ENVELOPE (${formatEnvelope(raw, message)})` : await renderFetchItem(message, item));
         }
         write(`* ${message.sequence} FETCH (${parts.join(" ")})\r\n`);
       }

@@ -120,6 +120,35 @@ describe("imap", () => {
     expect(status.response).toContain("UIDNEXT 2");
   });
 
+  test("supports Outlook-style UID FETCH message summaries", async () => {
+    activeServer = await setupServer();
+    await deliverInbound("Outlook summary", "message preview body");
+
+    const imap = await openImap();
+    await imapLogin(imap);
+    await imapTagged(imap, "SELECT INBOX");
+
+    const summary = await imapTagged(
+      imap,
+      "UID FETCH 1:* (UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODYSTRUCTURE BODY.PEEK[HEADER.FIELDS (From To Subject Date Message-ID)]<0.2048>)"
+    );
+    expect(summary.response).toContain("UID 1");
+    expect(summary.response).toContain("BODYSTRUCTURE");
+    expect(summary.response).toContain('ENVELOPE (');
+    expect(summary.response).toContain('(("Sender" NIL "sender" "external.test"))');
+    expect(summary.response).toContain("Subject: Outlook summary");
+    expect(summary.response).toContain("OK FETCH completed");
+
+    const withoutFields = await imapTagged(imap, "UID FETCH 1 (BODY.PEEK[HEADER.FIELDS.NOT (Subject)]<0.2048>)");
+    expect(withoutFields.response).toContain("OK FETCH completed");
+    expect(withoutFields.response).not.toContain("Subject: Outlook summary");
+
+    const body = await imapTagged(imap, "UID FETCH 1 (BODY.PEEK[]<0.4096>)");
+    expect(body.response).toContain("message preview body");
+
+    await imapTagged(imap, "LOGOUT");
+  });
+
   test("supports folder changes, append, copy, search, store, expunge, and POP3 coexistence", async () => {
     activeServer = await setupServer();
     await deliverInbound("Searchable", "first body");
