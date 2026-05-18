@@ -316,16 +316,21 @@ export class MailboxStore {
     const sourceName = normalizeFolderName(sourceFolder);
     const targetName = normalizeFolderName(targetFolder);
     const messages = await this.listFolderMessages(mailbox, sourceName);
+    const targetMessages = await this.listFolderMessages(mailbox, targetName);
+    const targetMessageIds = new Set(targetMessages.map((item) => item.messageId));
     const merged = [];
 
     for (const record of messages) {
-      const nextRecord = await this.appendFolderRecord(mailbox, targetName, record);
+      if (!targetMessageIds.has(record.messageId)) {
+        const nextRecord = await this.appendFolderRecord(mailbox, targetName, record);
+        targetMessageIds.add(record.messageId);
+        merged.push(nextRecord);
+      }
       await unlink(folderRecordPath(this.config.storage.rootDir, mailbox, sourceName, record.uid)).catch((error) => {
         if (error.code !== "ENOENT") {
           throw error;
         }
       });
-      merged.push(nextRecord);
     }
 
     if (merged.length > 0) {

@@ -226,6 +226,54 @@ describe("imap", () => {
     await imapTagged(imap, "LOGOUT");
   });
 
+  test("merges messages when a stale nested folder is renamed over an existing folder", async () => {
+    activeServer = await setupServer();
+
+    const sourceMessage = await activeServer.server.store.appendMessage("alice", "Trash/My Stuff", {
+      rawMessage: "From: one@example.test\r\nTo: alice@example.test\r\nSubject: Source copy\r\n\r\nsource\r\n",
+      mailFrom: "one@example.test",
+      rcptTo: ["alice@example.test"],
+      remoteAddress: "127.0.0.1"
+    });
+    await activeServer.server.store.appendStoredMessage("alice", "My Stuff", sourceMessage, {
+      flags: sourceMessage.flags,
+      internalDate: sourceMessage.internalDate,
+      recent: false
+    });
+    await activeServer.server.store.appendMessage("alice", "Trash/My Stuff", {
+      rawMessage: "From: two@example.test\r\nTo: alice@example.test\r\nSubject: Source only\r\n\r\nsource only\r\n",
+      mailFrom: "two@example.test",
+      rcptTo: ["alice@example.test"],
+      remoteAddress: "127.0.0.1"
+    });
+    await activeServer.server.store.appendMessage("alice", "My Stuff", {
+      rawMessage: "From: three@example.test\r\nTo: alice@example.test\r\nSubject: Target only\r\n\r\ntarget only\r\n",
+      mailFrom: "three@example.test",
+      rcptTo: ["alice@example.test"],
+      remoteAddress: "127.0.0.1"
+    });
+
+    const imap = await openImap();
+    await imapLogin(imap);
+    const moveBack = await imapTagged(imap, 'RENAME "Trash/My Stuff" "My Stuff"');
+    expect(moveBack.response).toContain("OK RENAME completed");
+
+    const list = await imapTagged(imap, 'LIST "" "*"');
+    expect(list.response).toContain('"My Stuff"');
+    expect(list.response).not.toContain('"Trash/My Stuff"');
+
+    const status = await imapTagged(imap, 'STATUS "My Stuff" (MESSAGES)');
+    expect(status.response).toContain("MESSAGES 3");
+
+    await imapTagged(imap, 'SELECT "My Stuff"');
+    const fetch = await imapTagged(imap, "FETCH 1:* (BODY.PEEK[HEADER])");
+    expect(fetch.response).toContain("Subject: Source copy");
+    expect(fetch.response).toContain("Subject: Source only");
+    expect(fetch.response).toContain("Subject: Target only");
+
+    await imapTagged(imap, "LOGOUT");
+  });
+
   test("delivers IDLE updates for smtp delivery, flag changes, and append from another session", async () => {
     activeServer = await setupServer();
 
