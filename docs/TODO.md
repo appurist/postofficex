@@ -16,3 +16,11 @@
 
 - Add automated coverage for `SIGHUP` certificate reload behavior.
   - The runtime supports TLS material reloads, but there is no direct test that exercises the signal-driven renewal path end to end.
+
+## Newsletters
+
+- Add DKIM signing for outbound, submission, and newsletter mail.
+  - SPF and DMARC alignment can authenticate the sending host, but DKIM is still important for newsletter deliverability and forwarding scenarios.
+
+- Include subscriber-specific unsubscribe tokens in expanded newsletter `List-Unsubscribe` headers.
+  - Confirmation emails include usable unsubscribe links, but newsletter posts should also expose direct one-click unsubscribe links for each subscriber.

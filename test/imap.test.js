@@ -174,6 +174,29 @@ describe("imap", () => {
     expect(list.response).not.toContain('"Temp"');
   });
 
+  test("filters listed folders when moving nested folders back to the top level", async () => {
+    activeServer = await setupServer();
+
+    const imap = await openImap();
+    await imapLogin(imap);
+    await imapTagged(imap, 'CREATE "Spam"');
+    await imapTagged(imap, 'CREATE "My Stuff"');
+    await imapTagged(imap, 'RENAME "My Stuff" "Spam/My Stuff"');
+
+    const exactTopLevel = await imapTagged(imap, 'LIST "" "My Stuff"');
+    expect(exactTopLevel.response).not.toContain('"My Stuff"');
+    expect(exactTopLevel.response).not.toContain('"Spam/My Stuff"');
+
+    const moveBack = await imapTagged(imap, 'RENAME "Spam/My Stuff" "My Stuff"');
+    expect(moveBack.response).toContain("OK RENAME completed");
+
+    const allFolders = await imapTagged(imap, 'LIST "" "*"');
+    expect(allFolders.response).toContain('"My Stuff"');
+    expect(allFolders.response).not.toContain('"Spam/My Stuff"');
+
+    await imapTagged(imap, "LOGOUT");
+  });
+
   test("delivers IDLE updates for smtp delivery, flag changes, and append from another session", async () => {
     activeServer = await setupServer();
 

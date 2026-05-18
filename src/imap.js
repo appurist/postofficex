@@ -60,6 +60,39 @@ function decodeMailboxName(value) {
   return parsed?.value ?? "";
 }
 
+function escapeRegex(value) {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+function mailboxPatternRegex(pattern) {
+  let source = "^";
+  for (const char of pattern) {
+    if (char === "*") {
+      source += ".*";
+    } else if (char === "%") {
+      source += "[^/]*";
+    } else {
+      source += escapeRegex(char);
+    }
+  }
+  source += "$";
+  return new RegExp(source);
+}
+
+function resolveMailboxPattern(reference, mailbox) {
+  if (!reference) {
+    return mailbox;
+  }
+  if (!mailbox) {
+    return reference;
+  }
+  return `${reference.replace(/\/$/, "")}/${mailbox}`;
+}
+
+function matchesMailboxPattern(folderName, pattern) {
+  return mailboxPatternRegex(pattern).test(folderName);
+}
+
 function stripOuterParens(value) {
   const trimmed = value.trim();
   if (trimmed.startsWith("(") && trimmed.endsWith(")")) {
@@ -595,7 +628,12 @@ export class ImapConnectionHandler {
           case "LIST":
           case "LSUB": {
             const folders = await this.store.listFolders(state.authenticatedUser.mailbox);
-            const visible = command === "LSUB" ? folders.filter((item) => item.subscribed) : folders;
+            const reference = parseAString(argument);
+            const mailbox = reference ? parseAString(argument, reference.nextIndex) : null;
+            const pattern = resolveMailboxPattern(reference?.value ?? "", mailbox?.value ?? "");
+            const visible = (command === "LSUB" ? folders.filter((item) => item.subscribed) : folders).filter((folder) =>
+              matchesMailboxPattern(folder.name, pattern)
+            );
             for (const folder of visible) {
               write(`* ${command} ${formatListAttributes(folder.name, folders.map((item) => item.name))} "/" ${quoteImap(folder.name)}\r\n`);
             }
