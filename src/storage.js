@@ -269,10 +269,6 @@ export class MailboxStore {
     }
 
     const folders = await this.listFolders(mailbox);
-    if (folders.some((item) => item.name === toName || item.name.startsWith(`${toName}/`))) {
-      throw new Error(`Mailbox folder already exists: ${toName}`);
-    }
-
     const matches = folders.filter((item) => item.name === fromName || item.name.startsWith(`${fromName}/`));
     if (matches.length === 0) {
       throw new Error(`Mailbox folder not found: ${fromName}`);
@@ -280,14 +276,69 @@ export class MailboxStore {
 
     for (const folder of matches.sort((a, b) => b.name.length - a.name.length)) {
       const nextName = folder.name === fromName ? toName : `${toName}${folder.name.slice(fromName.length)}`;
+      const refreshedFolders = await this.listFolders(mailbox);
+      const targetExists = refreshedFolders.some((item) => item.name === nextName);
       const currentBase = folderBase(this.config.storage.rootDir, mailbox, folder.name);
       const nextBase = folderBase(this.config.storage.rootDir, mailbox, nextName);
+
+      if (targetExists) {
+        await this.mergeFolderMessages(mailbox, folder.name, nextName);
+        await rm(currentBase, { recursive: true, force: true });
+        this.publishMailboxChange(mailbox, folder.name, { type: "folder-delete", folder: folder.name });
+        continue;
+      }
+
       await ensureParentDirectory(nextBase);
       await rename(currentBase, nextBase);
       await this.writeFolder(mailbox, nextName, { ...folder, name: nextName });
       this.publishMailboxChange(mailbox, folder.name, { type: "folder-rename", from: folder.name, to: nextName });
       this.publishMailboxChange(mailbox, nextName, { type: "folder-rename", from: folder.name, to: nextName });
     }
+  }
+
+  async appendFolderRecord(mailbox, folder, record) {
+    const targetFolder = await this.ensureFolder(mailbox, folder);
+    const uid = targetFolder.uidNext;
+    targetFolder.uidNext += 1;
+    await this.writeFolder(mailbox, targetFolder.name, targetFolder);
+
+    const nextRecord = {
+      ...record,
+      uid,
+      folder: targetFolder.name,
+      uidl: sha256(`${mailbox}:${targetFolder.name}:${uid}:${record.messageId}`)
+    };
+    await writeJson(folderRecordPath(this.config.storage.rootDir, mailbox, targetFolder.name, uid), nextRecord);
+    return nextRecord;
+  }
+
+  async mergeFolderMessages(mailbox, sourceFolder, targetFolder) {
+    const sourceName = normalizeFolderName(sourceFolder);
+    const targetName = normalizeFolderName(targetFolder);
+    const messages = await this.listFolderMessages(mailbox, sourceName);
+    const merged = [];
+
+    for (const record of messages) {
+      const nextRecord = await this.appendFolderRecord(mailbox, targetName, record);
+      await unlink(folderRecordPath(this.config.storage.rootDir, mailbox, sourceName, record.uid)).catch((error) => {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+      });
+      merged.push(nextRecord);
+    }
+
+    if (merged.length > 0) {
+      const exists = (await this.listFolderMessages(mailbox, targetName)).length;
+      this.publishMailboxChange(mailbox, targetName, {
+        type: "append",
+        folder: targetName,
+        uid: merged.at(-1)?.uid,
+        exists
+      });
+    }
+
+    return merged;
   }
 
   async setFolderSubscription(mailbox, folder, subscribed) {
